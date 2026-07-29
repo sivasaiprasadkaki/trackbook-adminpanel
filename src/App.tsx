@@ -23,6 +23,7 @@ export default function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchValue, setSearchValue] = useState('');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showSplash, setShowSplash] = useState<boolean>(() => {
     return sessionStorage.getItem('loginSuccessSplash') === 'true';
   });
@@ -92,10 +93,23 @@ export default function App() {
     document.title = titleMap[currentTab] || 'TrackBook Admin Panel';
   }, [currentTab]);
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
   // Clear search on tab changes (detected via route change)
   useEffect(() => {
     setSearchValue('');
   }, [location.pathname]);
+
+  // Presence heartbeat for real-time live user detection
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const sendHeartbeat = () => {
+      fetch('/api/auth/heartbeat', { credentials: 'include' }).catch(() => {});
+    };
+    sendHeartbeat();
+    const interval = setInterval(sendHeartbeat, 20000);
+    return () => clearInterval(interval);
+  }, [isAuthenticated]);
 
   // Fetch entries ledger
   const fetchEntries = async () => {
@@ -116,6 +130,16 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleGlobalRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchEntries();
+    // Dispatch custom refresh event for active tab listeners
+    window.dispatchEvent(new CustomEvent('app-global-refresh'));
+    setTimeout(() => {
+      setIsRefreshing(false);
+    }, 600);
   };
 
   useEffect(() => {
@@ -260,17 +284,20 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans flex text-slate-800 animate-fade-in">
-      {/* Sidebar - fixed left panel */}
+      {/* Sidebar - fixed left panel on desktop, slide drawer on mobile */}
       <Sidebar
         currentTab={currentTab}
+        isOpen={isMobileMenuOpen}
+        onClose={() => setIsMobileMenuOpen(false)}
         onTabChange={(tab) => {
           navigate('/' + tab);
+          setIsMobileMenuOpen(false);
         }}
         onLogout={handleLogout}
       />
 
       {/* Main Content Stage */}
-      <div className="flex-1 pl-[260px] min-h-screen flex flex-col transition-all duration-200">
+      <div className="flex-1 pl-0 md:pl-[260px] min-h-screen flex flex-col transition-all duration-200 w-full overflow-x-hidden">
         
         {/* Topbar Header */}
         <Topbar
@@ -281,11 +308,13 @@ export default function App() {
               ? setSearchValue
               : undefined
           }
-          onCreateNew={() => navigate('/entries')}
+          onRefresh={handleGlobalRefresh}
+          isRefreshing={isRefreshing}
+          onToggleMobileMenu={() => setIsMobileMenuOpen(prev => !prev)}
         />
 
         {/* Dynamic Panel view container */}
-        <main className="flex-1 p-8 pt-24 bg-slate-50 overflow-y-auto max-w-[1400px] w-full mx-auto">
+        <main className="flex-1 p-3 sm:p-6 md:p-8 pt-20 md:pt-24 bg-slate-50 overflow-y-auto max-w-[1400px] w-full mx-auto">
           {renderTabContent()}
         </main>
       </div>

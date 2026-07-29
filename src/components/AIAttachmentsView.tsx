@@ -27,7 +27,10 @@ import {
   Paperclip,
   Copy,
   PlusCircle,
-  Database
+  Database,
+  User,
+  UserCheck,
+  Users
 } from 'lucide-react';
 
 const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(input, { ...init, credentials: 'include' });
@@ -78,6 +81,22 @@ export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsVie
 
   // Filter States
   const [selectedResourceType, setSelectedResourceType] = useState<string>('all'); // all, image, pdf, excel, csv, zip, ai, manual
+  const [systemUsers, setSystemUsers] = useState<any[]>([]);
+  const [selectedUserFilter, setSelectedUserFilter] = useState<string>('all');
+  const [userDropdownQuery, setUserDropdownQuery] = useState('');
+  const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false);
+  const userDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Outside click listener for User dropdown
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (userDropdownRef.current && !userDropdownRef.current.contains(event.target as Node)) {
+        setIsUserDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Interactive States / Modals
   const [previewFile, setPreviewFile] = useState<CloudFile | null>(null);
@@ -116,9 +135,16 @@ export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsVie
         setCloudName(configData.cloudName);
 
         if (configData.configured) {
-          // Fetch Cloudinary resource index
-          const dataRes = await fetch('/api/cloudinary/resources');
-          if (dataRes.ok) {
+          // Fetch Cloudinary resource index and system users
+          const [dataRes, usersRes] = await Promise.all([
+            fetch('/api/cloudinary/resources'),
+            fetch('/api/users').catch(() => null)
+          ]);
+          if (usersRes && usersRes.ok) {
+            const uData = await usersRes.json();
+            setSystemUsers(uData);
+          }
+          if (dataRes && dataRes.ok) {
             const data = await dataRes.json();
             if (data.success) {
               setFiles(data.resources || []);
@@ -224,6 +250,66 @@ export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsVie
     return getFolderStats('');
   }, [files]);
 
+  // Helper to extract a userName from tags or context
+  const getUserNameFromFile = (file: CloudFile) => {
+    const contextName = file.context?.custom?.user_name || file.context?.user_name;
+    if (contextName) return contextName;
+
+    // Check if there is a tag denoting user
+    const userTag = file.tags.find(t => t.startsWith('user_'));
+    if (userTag) return userTag.replace('user_', '');
+
+    // Try parsing user from public id path
+    const parts = file.public_id.split('/');
+    if (parts.length > 2 && parts[0] === 'TrackBook Cloud') {
+      return parts[1]; // TrackBook Cloud/User A/Receipts -> User A
+    }
+
+    return 'System Admin';
+  };
+
+  // Derived User List with uploaded file counts
+  const userListWithCounts = React.useMemo(() => {
+    const countsMap = new Map<string, number>();
+
+    files.forEach(f => {
+      const uName = getUserNameFromFile(f);
+      if (uName) {
+        countsMap.set(uName, (countsMap.get(uName) || 0) + 1);
+      }
+    });
+
+    const list: { id: string; name: string; email: string; fileCount: number }[] = [];
+    const addedNames = new Set<string>();
+
+    systemUsers.forEach(u => {
+      const uName = u.name || u.full_name || u.username || u.email;
+      if (!uName) return;
+      const count = countsMap.get(uName) || countsMap.get(u.id) || countsMap.get(u.email) || 0;
+      list.push({
+        id: u.id || uName,
+        name: uName,
+        email: u.email || '',
+        fileCount: count
+      });
+      addedNames.add(uName.toLowerCase());
+    });
+
+    countsMap.forEach((count, name) => {
+      if (!addedNames.has(name.toLowerCase())) {
+        list.push({
+          id: name,
+          name: name,
+          email: '',
+          fileCount: count
+        });
+        addedNames.add(name.toLowerCase());
+      }
+    });
+
+    return list;
+  }, [systemUsers, files]);
+
   // 4. Client-side File Filtering & Search
   const filteredFiles = React.useMemo(() => {
     let result = [...files];
@@ -260,6 +346,21 @@ export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsVie
       }
     }
 
+    // Selected User Filter
+    if (selectedUserFilter !== 'all') {
+      const targetUser = selectedUserFilter.toLowerCase();
+      result = result.filter(f => {
+        const uName = getUserNameFromFile(f).toLowerCase();
+        const matchesName = uName === targetUser || uName.includes(targetUser);
+        const matchesContext = f.context?.custom?.user_name?.toLowerCase().includes(targetUser) || 
+                               f.context?.user_name?.toLowerCase().includes(targetUser) ||
+                               f.context?.custom?.user_id?.toLowerCase() === targetUser;
+        const matchesTag = f.tags.some(t => t.toLowerCase().includes(targetUser));
+        const matchesFolder = f.folder.toLowerCase().includes(targetUser);
+        return matchesName || matchesContext || matchesTag || matchesFolder;
+      });
+    }
+
     // Global Text Search
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -267,7 +368,8 @@ export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsVie
         const matchesName = f.filename.toLowerCase().includes(q);
         const matchesFolder = f.folder.toLowerCase().includes(q);
         const matchesId = f.public_id.toLowerCase().includes(q);
-        const matchesUser = f.context?.custom?.user_name?.toLowerCase().includes(q) || 
+        const matchesUser = getUserNameFromFile(f).toLowerCase().includes(q) ||
+                            f.context?.custom?.user_name?.toLowerCase().includes(q) || 
                             f.context?.user_name?.toLowerCase().includes(q) || 
                             f.tags.some(t => t.toLowerCase().includes(q));
         return matchesName || matchesFolder || matchesId || matchesUser;
@@ -275,7 +377,7 @@ export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsVie
     }
 
     return result;
-  }, [files, selectedFolderPath, selectedResourceType, searchQuery]);
+  }, [files, selectedFolderPath, selectedResourceType, selectedUserFilter, searchQuery]);
 
   // 5. Utility Formatter functions
   const formatBytes = (bytes: number) => {
@@ -301,24 +403,6 @@ export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsVie
       return <FileArchive className="w-5 h-5 text-amber-600" />;
     }
     return <File className="w-5 h-5 text-slate-400" />;
-  };
-
-  // Helper to extract a userName from tags or context (No sample placeholders!)
-  const getUserNameFromFile = (file: CloudFile) => {
-    const contextName = file.context?.custom?.user_name || file.context?.user_name;
-    if (contextName) return contextName;
-
-    // Check if there is a tag denoting user
-    const userTag = file.tags.find(t => t.startsWith('user_'));
-    if (userTag) return userTag.replace('user_', '');
-
-    // Try parsing user from public id path
-    const parts = file.public_id.split('/');
-    if (parts.length > 2 && parts[0] === 'TrackBook Cloud') {
-      return parts[1]; // TrackBook Cloud/User A/Receipts -> User A
-    }
-
-    return 'System Admin';
   };
 
   // 6. Action Handlers (Live calling to server APIs)
@@ -612,21 +696,115 @@ export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsVie
           <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-4">
             <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
               
-              {/* Global Search */}
-              <div className="relative w-full md:max-w-md">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Search by file name, public ID, folder or user name..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 bg-slate-50/50"
-                />
-                {searchQuery && (
-                  <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                    <X className="w-3.5 h-3.5" />
+              {/* Search & User Filter Container */}
+              <div className="flex flex-col sm:flex-row items-center gap-2 w-full md:max-w-xl">
+                {/* Global Search */}
+                <div className="relative w-full">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search by file name, public ID, folder or user name..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 bg-slate-50/50"
+                  />
+                  {searchQuery && (
+                    <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* User Filter Dropdown */}
+                <div className="relative shrink-0 w-full sm:w-auto" ref={userDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsUserDropdownOpen(!isUserDropdownOpen)}
+                    className={`flex items-center justify-between gap-2 px-3 py-2 border rounded-lg text-xs font-medium transition-all w-full sm:w-auto cursor-pointer ${
+                      selectedUserFilter !== 'all'
+                        ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <UserCheck className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                      <span className="truncate max-w-[120px]">
+                        {selectedUserFilter === 'all'
+                          ? 'All Users'
+                          : selectedUserFilter}
+                      </span>
+                    </div>
+                    <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isUserDropdownOpen ? 'rotate-180' : ''}`} />
                   </button>
-                )}
+
+                  {isUserDropdownOpen && (
+                    <div className="absolute left-0 sm:right-0 sm:left-auto mt-1 w-72 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden text-xs">
+                      <div className="p-2 border-b border-slate-100 bg-slate-50">
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                          <input
+                            type="text"
+                            placeholder="Search user name or email..."
+                            value={userDropdownQuery}
+                            onChange={(e) => setUserDropdownQuery(e.target.value)}
+                            className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs focus:outline-none focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="max-h-60 overflow-y-auto p-1 divide-y divide-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedUserFilter('all');
+                            setIsUserDropdownOpen(false);
+                          }}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer ${
+                            selectedUserFilter === 'all' ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Users className="w-4 h-4 text-slate-400" />
+                            <span>All Users ({files.length} files)</span>
+                          </div>
+                          {selectedUserFilter === 'all' && <Check className="w-3.5 h-3.5 text-blue-600" />}
+                        </button>
+
+                        {userListWithCounts
+                          .filter(u => 
+                            u.name.toLowerCase().includes(userDropdownQuery.toLowerCase()) || 
+                            u.email.toLowerCase().includes(userDropdownQuery.toLowerCase())
+                          )
+                          .map(u => (
+                            <button
+                              key={u.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedUserFilter(u.name);
+                                setIsUserDropdownOpen(false);
+                              }}
+                              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer ${
+                                selectedUserFilter === u.name ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-700'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-[10px] shrink-0">
+                                  {u.name.charAt(0).toUpperCase()}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium text-slate-800">{u.name}</p>
+                                  {u.email && <p className="truncate text-[10px] text-slate-400">{u.email}</p>}
+                                </div>
+                              </div>
+                              <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-mono font-semibold ml-2">
+                                {u.fileCount}
+                              </span>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* View Mode & Refresh Actions */}
@@ -688,6 +866,22 @@ export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsVie
                   {filter.label}
                 </button>
               ))}
+
+              {selectedUserFilter !== 'all' && (
+                <div className="flex items-center gap-1 pl-2 border-l border-slate-200">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-600 text-white shadow-sm">
+                    <UserCheck className="w-3.5 h-3.5" />
+                    <span>User: {selectedUserFilter}</span>
+                    <button
+                      onClick={() => setSelectedUserFilter('all')}
+                      className="ml-1 hover:text-slate-200 cursor-pointer"
+                      title="Clear user filter"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 

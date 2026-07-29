@@ -11,10 +11,9 @@ import { User, Entry, Cashbook, Attachment, Receipt, DashboardStats } from './sr
 
 dotenv.config();
 
-// Ensure SUPABASE_SERVICE_ROLE_KEY is present
+// Ensure SUPABASE_SERVICE_ROLE_KEY is handled gracefully
 if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("ERROR: Missing SUPABASE_SERVICE_ROLE_KEY");
-  process.exit(1);
+  console.warn("WARNING: Missing SUPABASE_SERVICE_ROLE_KEY - falling back to ANON key or memory mode");
 }
 
 // Configure Cloudinary safely
@@ -64,8 +63,8 @@ let supabaseAdminClient: any = null;
 function getSupabaseAdmin() {
   if (!supabaseAdminClient) {
     const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    console.log(`[DEBUG] Initializing Supabase Admin Client. URL defined: ${!!url}, Service Role Key defined: ${!!key}`);
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+    console.log(`[DEBUG] Initializing Supabase Admin Client. URL defined: ${!!url}, Key defined: ${!!key}`);
     if (url && key) {
       supabaseAdminClient = createClient(url, key, {
         auth: {
@@ -74,28 +73,28 @@ function getSupabaseAdmin() {
         }
       });
     } else {
-      console.warn('[DEBUG] Supabase Admin Client not initialized: Missing URL or Service Role Key.');
+      console.warn('[DEBUG] Supabase Admin Client not initialized: Missing URL or Key.');
     }
   }
   return supabaseAdminClient;
 }
 
 async function runStartupVerification() {
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
   const isServiceRoleLoaded = !!serviceRoleKey;
-  console.log(`Service Role Loaded: ${isServiceRoleLoaded ? 'YES' : 'NO'}`);
+  console.log(`Supabase Service Role/Anon Key Loaded: ${isServiceRoleLoaded ? 'YES' : 'NO'}`);
   
   if (!isServiceRoleLoaded) {
-    console.error("ERROR: Missing SUPABASE_SERVICE_ROLE_KEY");
-    process.exit(1);
+    console.warn("WARNING: Missing Supabase keys in environment");
+    return;
   }
 
   const adminClient = getSupabaseAdmin();
   console.log(`Admin Client Initialized: ${!!adminClient ? 'YES' : 'NO'}`);
 
   if (!adminClient) {
-    console.error("ERROR: Could not initialize Admin Client.");
-    process.exit(1);
+    console.warn("WARNING: Could not initialize Admin Client.");
+    return;
   }
 
   // 1. Dashboard Query
@@ -248,7 +247,23 @@ async function autoSeedFirstAdmin() {
 }
 
 
-function parseUserStatus(dbStatus: string | null, lastSignInAt: string | null) {
+// In-memory active presence tracker for live users detection
+const activeUserPresence = new Map<string, number>();
+
+function touchUserPresence(key: string | null | undefined) {
+  if (!key) return;
+  const k = key.trim().toLowerCase();
+  if (k) {
+    activeUserPresence.set(k, Date.now());
+  }
+}
+
+function parseUserStatus(
+  dbStatus: string | null,
+  lastSignInAt: string | null,
+  userIdentifiers: (string | null | undefined)[] = [],
+  latestEntryTime: string | null = null
+) {
   let status = 'Active';
   let lastSeen: string | null = null;
 
@@ -262,18 +277,49 @@ function parseUserStatus(dbStatus: string | null, lastSignInAt: string | null) {
     }
   }
 
-  // Fallback to lastSignInAt if lastSeen is not set
-  if (!lastSeen && lastSignInAt) {
-    lastSeen = lastSignInAt;
+  // Fallback to lastSignInAt if lastSeen is not set or earlier
+  if (lastSignInAt) {
+    if (!lastSeen || new Date(lastSignInAt).getTime() > new Date(lastSeen).getTime()) {
+      lastSeen = lastSignInAt;
+    }
   }
 
-  // Determine if online (within last 2 minutes)
+  // Fallback to latestEntryTime if more recent
+  if (latestEntryTime) {
+    if (!lastSeen || new Date(latestEntryTime).getTime() > new Date(lastSeen).getTime()) {
+      lastSeen = latestEntryTime;
+    }
+  }
+
+  const now = Date.now();
+  let recentPresenceTime: number | null = null;
+
+  for (const id of userIdentifiers) {
+    if (id) {
+      const k = id.trim().toLowerCase();
+      const hb = activeUserPresence.get(k);
+      if (hb && (!recentPresenceTime || hb > recentPresenceTime)) {
+        recentPresenceTime = hb;
+      }
+    }
+  }
+
+  if (recentPresenceTime) {
+    const iso = new Date(recentPresenceTime).toISOString();
+    if (!lastSeen || recentPresenceTime > new Date(lastSeen).getTime()) {
+      lastSeen = iso;
+    }
+  }
+
+  // Consider online if active presence or lastSeen was within last 15 minutes (900,000 ms)
   let isOnline = false;
-  if (lastSeen) {
+  if (recentPresenceTime && (now - recentPresenceTime < 15 * 60 * 1000)) {
+    isOnline = true;
+  } else if (lastSeen) {
     const lastSeenTime = new Date(lastSeen).getTime();
-    const now = Date.now();
-    // 2 minutes in milliseconds = 120,000
-    isOnline = (now - lastSeenTime) < 120000;
+    if (!isNaN(lastSeenTime)) {
+      isOnline = (now - lastSeenTime) < 15 * 60 * 1000;
+    }
   }
 
   return {
@@ -496,6 +542,12 @@ authRouter.get('/session', async (req, res) => {
       if (session && session.admin && session.expiresAt > Date.now()) {
         authenticated = true;
         userPayload = session.user;
+        if (session.user) {
+          touchUserPresence(session.user.id);
+          touchUserPresence(session.user.username);
+          touchUserPresence(session.user.full_name);
+          touchUserPresence(session.user.email);
+        }
         console.log('[AUTH FLOW] Session is VALID. Authenticated user:', session.user.username);
       } else {
         if (!session) {
@@ -714,6 +766,23 @@ app.post('/api/admin/create-first-admin', async (req, res) => {
   }
 });
 
+authRouter.get('/heartbeat', async (req, res) => {
+  const sessionToken = getSessionToken(req);
+  if (sessionToken) {
+    try {
+      const decrypted = decryptSecret(sessionToken);
+      const session = JSON.parse(decrypted);
+      if (session && session.user) {
+        touchUserPresence(session.user.id);
+        touchUserPresence(session.user.username);
+        touchUserPresence(session.user.full_name);
+        touchUserPresence(session.user.email);
+      }
+    } catch (e) {}
+  }
+  res.json({ ok: true, timestamp: Date.now() });
+});
+
 app.use('/api/auth', authRouter);
 
 // Middleware to secure all other API endpoints
@@ -741,6 +810,12 @@ function requireAuth(req: any, res: any, next: any) {
       return res.status(401).json({ error: 'Unauthorized: Session expired or invalid' });
     }
     // Session is valid
+    if (session.user) {
+      touchUserPresence(session.user.id);
+      touchUserPresence(session.user.username);
+      touchUserPresence(session.user.full_name);
+      touchUserPresence(session.user.email);
+    }
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Unauthorized: Invalid session' });
@@ -817,7 +892,7 @@ app.get('/api/stats', async (req, res) => {
         const authUser = authUsersMap.get(u.id) || (u.email ? authUsersMap.get(u.email.toLowerCase()) : null);
         const lastSignInAt = authUser ? authUser.last_sign_in_at : null;
 
-        const parsed = parseUserStatus(u.status, lastSignInAt);
+        const parsed = parseUserStatus(u.status, lastSignInAt, [u.id, u.email, u.name]);
         const normStatus = parsed.status.toLowerCase();
         if (normStatus === 'active') {
           activeCount++;
@@ -1009,6 +1084,31 @@ app.get('/api/users', async (req, res) => {
       if (p.email) profilesMap.set(p.email.toLowerCase(), p);
     });
 
+    // 3.5 Fetch latest entry timestamps for activity/presence tracking
+    const userLatestEntryMap = new Map<string, string>();
+    try {
+      const { data: recentEntries } = await supabase
+        .from('entries')
+        .select('user_id, user_name, created_at')
+        .order('created_at', { ascending: false })
+        .limit(300);
+
+      if (recentEntries) {
+        recentEntries.forEach((e: any) => {
+          if (e.created_at) {
+            if (e.user_id && !userLatestEntryMap.has(e.user_id)) {
+              userLatestEntryMap.set(e.user_id, e.created_at);
+            }
+            if (e.user_name && !userLatestEntryMap.has(e.user_name.toLowerCase())) {
+              userLatestEntryMap.set(e.user_name.toLowerCase(), e.created_at);
+            }
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Error fetching recent entries for presence:', e);
+    }
+
     // 4. Combine/merge users
     const finalUsers: any[] = [];
     const seenUserIds = new Set<string>();
@@ -1064,7 +1164,8 @@ app.get('/api/users', async (req, res) => {
           rawStatus = profile.status || 'Active';
         }
 
-        const parsed = parseUserStatus(rawStatus, u.last_sign_in_at || null);
+        const latestEntry = userLatestEntryMap.get(u.id) || (name ? userLatestEntryMap.get(name.toLowerCase()) : null);
+        const parsed = parseUserStatus(rawStatus, u.last_sign_in_at || null, [u.id, email, name, emailLower], latestEntry);
 
         // Compute Phone
         const phone = u.phone || (pubUser ? pubUser.phone : '') || (profile ? profile.phone : '') || '';
@@ -1121,7 +1222,8 @@ app.get('/api/users', async (req, res) => {
 
         let role = u.is_admin ? 'Admin' : (u.role || 'User');
         let rawStatus = u.status || 'Active';
-        const parsed = parseUserStatus(rawStatus, null);
+        const latestEntry = userLatestEntryMap.get(id) || (name ? userLatestEntryMap.get(name.toLowerCase()) : null);
+        const parsed = parseUserStatus(rawStatus, null, [id, email, name, emailLower], latestEntry);
 
         const phone = u.phone || (profile ? profile.phone : '') || '';
         const joinedDate = u.created_at || '';

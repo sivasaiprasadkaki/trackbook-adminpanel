@@ -100,7 +100,12 @@ export default function UsersView({ onRefreshStats }: UsersViewProps) {
     fetchUsers(true);
     // Real-time auto-refresh interval for user status
     const interval = setInterval(() => fetchUsers(false), 10000);
-    return () => clearInterval(interval);
+    const handleGlobalRefresh = () => fetchUsers(true);
+    window.addEventListener('app-global-refresh', handleGlobalRefresh);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('app-global-refresh', handleGlobalRefresh);
+    };
   }, []);
 
   const triggerNotification = (msg: string) => {
@@ -395,8 +400,98 @@ export default function UsersView({ onRefreshStats }: UsersViewProps) {
           </div>
         </div>
 
-        {/* Data Table */}
-        <div className="overflow-x-auto">
+        {/* Mobile Cards View */}
+        <div className="grid grid-cols-1 gap-3 p-4 md:hidden">
+          {loading ? (
+            <p className="text-center py-8 text-slate-400 text-xs">Loading users registry...</p>
+          ) : filteredUsers.length === 0 ? (
+            <p className="text-center py-8 text-slate-400 text-xs">No registry matches found.</p>
+          ) : (
+            filteredUsers.map((user) => {
+              const initials = user.name
+                .split(' ')
+                .map(n => n[0])
+                .join('')
+                .toUpperCase()
+                .slice(0, 2);
+
+              return (
+                <div key={user.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:border-blue-400 transition-all flex flex-col gap-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      {user.avatarUrl ? (
+                        <div className="w-11 h-11 rounded-full overflow-hidden border border-slate-200 bg-slate-100 shrink-0">
+                          <img alt={user.name} src={user.avatarUrl} className="w-full h-full object-cover" />
+                        </div>
+                      ) : (
+                        <div className="w-11 h-11 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm shrink-0">
+                          {initials}
+                        </div>
+                      )}
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-sm">{user.name}</h4>
+                        <p className="text-xs text-blue-600 font-medium">{user.role}</p>
+                      </div>
+                    </div>
+
+                    {user.isOnline ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Online
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-500 border border-slate-200 shrink-0">
+                        <span className="w-2 h-2 rounded-full bg-slate-400"></span>
+                        Offline
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="text-xs space-y-1.5 bg-slate-50 p-2.5 rounded-lg border border-slate-100 text-slate-600">
+                    <p className="flex justify-between">
+                      <span className="text-slate-400">Email:</span>
+                      <span className="font-medium text-slate-800 truncate ml-2">{user.email}</span>
+                    </p>
+                    {user.phone && (
+                      <p className="flex justify-between">
+                        <span className="text-slate-400">Phone:</span>
+                        <span className="font-mono text-slate-800">{user.phone}</span>
+                      </p>
+                    )}
+                    <p className="flex justify-between">
+                      <span className="text-slate-400">Last Seen:</span>
+                      <span className="font-mono text-slate-700">{formatLastSeen(user.lastSeen)}</span>
+                    </p>
+                    <p className="flex justify-between">
+                      <span className="text-slate-400">Signup Date:</span>
+                      <span>{user.joinedDate}</span>
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-100">
+                    <button
+                      onClick={() => openEditModal(user)}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Edit className="w-3.5 h-3.5" />
+                      <span>Edit</span>
+                    </button>
+                    <button
+                      onClick={() => handleDelete(user.id)}
+                      className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop Data Table */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs font-semibold uppercase tracking-wider">

@@ -44,6 +44,7 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
   // Fetch server stats
   const fetchStats = async () => {
     try {
+      setLoading(true);
       const res = await fetch('/api/stats');
       if (res.ok) {
         const data = await res.json();
@@ -51,6 +52,8 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
       }
     } catch (err) {
       console.error('Error fetching dashboard stats:', err);
+    } finally {
+      setTimeout(() => setLoading(false), 300);
     }
   };
 
@@ -58,7 +61,12 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
     fetchStats();
     // Real-time stats auto-refresh
     const interval = setInterval(fetchStats, 10000);
-    return () => clearInterval(interval);
+    const handleGlobalRefresh = () => fetchStats();
+    window.addEventListener('app-global-refresh', handleGlobalRefresh);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('app-global-refresh', handleGlobalRefresh);
+    };
   }, [entries]);
 
   // Format currency in Indian Rupees format (Lakhs/Crores)
@@ -326,7 +334,57 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          {/* Mobile Cards View */}
+          <div className="grid grid-cols-1 gap-3 p-4 md:hidden">
+            {paginatedEntries.length === 0 ? (
+              <p className="text-center py-6 text-slate-400 text-xs">No matching activity found.</p>
+            ) : (
+              paginatedEntries.map((entry) => {
+                const initials = entry.userName
+                  .split(' ')
+                  .map(n => n[0])
+                  .join('')
+                  .toUpperCase()
+                  .slice(0, 2);
+
+                return (
+                  <div key={entry.id} className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs shrink-0">
+                          {initials}
+                        </div>
+                        <span className="font-bold text-slate-900 text-xs">{entry.userName}</span>
+                      </div>
+                      <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-semibold ${
+                        entry.status === 'Success'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : entry.status === 'Processing'
+                          ? 'bg-blue-100 text-blue-800'
+                          : 'bg-rose-100 text-rose-800'
+                      }`}>
+                        {entry.status}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs pt-1">
+                      <span className="text-slate-500 font-medium">{entry.cashbookName}</span>
+                      <span className="font-mono font-bold text-slate-900">
+                        {entry.amount !== null ? `₹ ${entry.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '-'}
+                      </span>
+                    </div>
+
+                    <div className="text-[10px] font-mono text-slate-400 text-right">
+                      {entry.date} • {entry.time}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Desktop Table */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">

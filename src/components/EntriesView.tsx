@@ -813,10 +813,85 @@ export default function EntriesView({ onEntryLogged }: EntriesViewProps) {
             </div>
           ) : viewMode === 'list' ? (
             
-            /* LIST VIEW: Professional Data Table */
-            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-              <div className="overflow-auto max-h-[500px] relative">
-                <table className="w-full text-left border-collapse">
+            /* LIST VIEW: Mobile Cards + Desktop Data Table */
+            <div className="space-y-4">
+              {/* Mobile Cards View (< md screen) */}
+              <div className="block md:hidden space-y-3">
+                {filteredEntries.map(e => {
+                  const balance = runningBalancesMap.get(e.id) ?? 0;
+                  const hasAttachments = e.attachments && e.attachments.length > 0;
+                  const firstAttachment = hasAttachments ? e.attachments[0] : null;
+
+                  return (
+                    <div key={e.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-3 hover:border-blue-400 transition-all">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">
+                          <Tag className="w-3 h-3 text-slate-400" />
+                          <span>{e.category}</span>
+                        </span>
+                        <span className="text-[11px] font-mono text-slate-400 font-medium">
+                          {e.date} {e.time}
+                        </span>
+                      </div>
+
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-sm">{e.description}</h4>
+                        <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100">
+                          <div className="flex items-center gap-1">
+                            {e.type === 'in' ? (
+                              <div className="flex items-center gap-1 text-emerald-600 font-bold text-base font-mono">
+                                <ArrowUpRight className="w-4 h-4 shrink-0" />
+                                <span>₹ {e.amount?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1 text-rose-600 font-bold text-base font-mono">
+                                <ArrowDownLeft className="w-4 h-4 shrink-0" />
+                                <span>₹ {e.amount?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider font-mono">Running Bal</p>
+                            <p className="text-xs font-bold text-slate-700 font-mono">
+                              ₹ {balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100 text-slate-500">
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 bg-blue-50 text-blue-700 font-bold rounded text-[10px] uppercase">{e.mode}</span>
+                          <span className="text-[11px]">By <strong>{e.userName}</strong></span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {firstAttachment && (
+                            <button
+                              type="button"
+                              onClick={() => setPreviewAttachment(firstAttachment)}
+                              className="px-2 py-1 bg-slate-100 text-slate-700 text-[11px] font-semibold rounded hover:bg-slate-200 cursor-pointer"
+                            >
+                              Attachment
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDeleteEntry(e.id)}
+                            className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Desktop Table View (>= md screen) */}
+              <div className="hidden md:block bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                <div className="overflow-auto max-h-[500px] relative">
+                  <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                       <th className="sticky top-0 bg-slate-50 z-10 py-3.5 px-4 font-semibold shadow-[inset_0_-1px_0_rgba(226,232,240,1)]">Date</th>
@@ -953,6 +1028,7 @@ export default function EntriesView({ onEntryLogged }: EntriesViewProps) {
                 {filteredEntries.length} Transactions Audit Logs Loaded
               </div>
             </div>
+          </div>
 
           ) : (
 
