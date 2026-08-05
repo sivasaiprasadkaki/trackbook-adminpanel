@@ -20,6 +20,7 @@ export default function App() {
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [isInitialized, setIsInitialized] = useState<boolean | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ id: string; username: string; full_name?: string; role: string } | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchValue, setSearchValue] = useState('');
@@ -34,11 +35,17 @@ export default function App() {
       try {
         console.log('[DEBUG] App: Checking authentication session status...');
         const res = await fetch('/api/auth/session', { credentials: 'include' });
-        if (res.ok) {
+        const contentType = res.headers.get('content-type');
+        if (res.ok && contentType && contentType.includes('application/json')) {
           const data = await res.json();
           console.log(`[DEBUG] App SESSION: authenticated=${data.authenticated}, is_initialized=${data.is_initialized}`);
           setIsInitialized(data.is_initialized);
           setIsAuthenticated(data.authenticated);
+          if (data.user) {
+            setCurrentUser(data.user);
+          } else {
+            setCurrentUser(null);
+          }
         } else {
           console.error('[DEBUG] App: Session endpoint returned error status:', res.status);
           setIsAuthenticated(false);
@@ -201,6 +208,8 @@ export default function App() {
     'settings': 'System Settings'
   };
 
+  const isSuperAdmin = currentUser?.role === 'super_admin';
+
   // Render the appropriate panel view
   const renderTabContent = () => {
     switch (currentTab) {
@@ -213,22 +222,23 @@ export default function App() {
           />
         );
       case 'users':
-        return <UsersView onRefreshStats={fetchEntries} />;
+        return <UsersView onRefreshStats={fetchEntries} isSuperAdmin={isSuperAdmin} />;
       case 'cashbooks':
-        return <CashbooksView onAddCashbook={fetchEntries} />;
+        return <CashbooksView onAddCashbook={fetchEntries} isSuperAdmin={isSuperAdmin} />;
       case 'entries':
         return (
           <EntriesView
             entries={entries}
             onEntryLogged={fetchEntries}
+            isSuperAdmin={isSuperAdmin}
           />
         );
       case 'attachments':
-        return <AttachmentsView />;
+        return <AttachmentsView isSuperAdmin={isSuperAdmin} />;
       case 'cloud':
-        return <AIAttachmentsView onProcessSuccess={fetchEntries} />;
+        return <AIAttachmentsView onProcessSuccess={fetchEntries} isSuperAdmin={isSuperAdmin} />;
       case 'settings':
-        return <SettingsView onResetDatabase={fetchEntries} />;
+        return <SettingsView onResetDatabase={fetchEntries} isSuperAdmin={isSuperAdmin} />;
       default:
         return (
           <DashboardView
@@ -294,6 +304,7 @@ export default function App() {
           setIsMobileMenuOpen(false);
         }}
         onLogout={handleLogout}
+        currentUser={currentUser}
       />
 
       {/* Main Content Stage */}

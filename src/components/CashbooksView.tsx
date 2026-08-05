@@ -9,7 +9,8 @@ import {
   X,
   AlertCircle,
   Grid,
-  List
+  List,
+  Trash2
 } from 'lucide-react';
 import { Cashbook } from '../types';
 
@@ -17,9 +18,10 @@ const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(inp
 
 interface CashbooksViewProps {
   onAddCashbook?: () => void;
+  isSuperAdmin?: boolean;
 }
 
-export default function CashbooksView({ onAddCashbook }: CashbooksViewProps) {
+export default function CashbooksView({ onAddCashbook, isSuperAdmin = true }: CashbooksViewProps) {
   const [cashbooks, setCashbooks] = useState<Cashbook[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -28,6 +30,29 @@ export default function CashbooksView({ onAddCashbook }: CashbooksViewProps) {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
     return (sessionStorage.getItem('cashbooks_view_mode') as 'grid' | 'list') || 'grid';
   });
+
+  // Delete Modal State
+  const [cashbookToDelete, setCashbookToDelete] = useState<Cashbook | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDeleteCashbook = async (cb: Cashbook) => {
+    try {
+      setIsDeleting(true);
+      const res = await fetch(`/api/cashbooks/${cb.id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setCashbookToDelete(null);
+        fetchCashbooks();
+      } else {
+        console.error('Failed to delete cashbook');
+      }
+    } catch (err) {
+      console.error('Error deleting cashbook:', err);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   useEffect(() => {
     sessionStorage.setItem('cashbooks_view_mode', viewMode);
@@ -166,9 +191,21 @@ export default function CashbooksView({ onAddCashbook }: CashbooksViewProps) {
                     <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
                       <Wallet className="w-5 h-5" />
                     </div>
-                    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${statusBadge}`}>
-                      {cb.status}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${statusBadge}`}>
+                        {cb.status}
+                      </span>
+                      {isSuperAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => setCashbookToDelete(cb)}
+                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          title="Delete Cashbook"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <h3 className="text-base font-bold text-slate-900">{cb.name}</h3>
@@ -249,6 +286,7 @@ export default function CashbooksView({ onAddCashbook }: CashbooksViewProps) {
                   <th className="py-3.5 px-4 text-right">Current Balance</th>
                   <th className="py-3.5 px-4">Budget Utilization</th>
                   <th className="py-3.5 px-5 text-right">Entries Count</th>
+                  <th className="py-3.5 px-4 text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
@@ -327,11 +365,58 @@ export default function CashbooksView({ onAddCashbook }: CashbooksViewProps) {
                           {cb.entriesCount} Logs
                         </span>
                       </td>
+
+                      {/* Action */}
+                      <td className="py-4 px-4 text-center">
+                        {isSuperAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => setCashbookToDelete(cb)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title="Delete Cashbook"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal Overlay */}
+      {cashbookToDelete && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-xl max-w-sm w-full overflow-hidden animate-fade-in mx-4 p-6 text-center">
+            <div className="w-12 h-12 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-slate-900 text-lg mb-1">Delete Cashbook?</h3>
+            <p className="text-xs text-slate-500 mb-6">
+              Are you sure you want to delete <strong className="text-slate-800">{cashbookToDelete.name}</strong>? All associated entries and log records will be permanently removed.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setCashbookToDelete(null)}
+                disabled={isDeleting}
+                className="flex-1 h-10 border border-slate-200 hover:bg-slate-50 rounded-lg text-xs font-semibold text-slate-700 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteCashbook(cashbookToDelete)}
+                disabled={isDeleting}
+                className="flex-1 h-10 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer shadow-sm disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {isDeleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
           </div>
         </div>
       )}

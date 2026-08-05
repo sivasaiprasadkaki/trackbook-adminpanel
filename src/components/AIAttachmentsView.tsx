@@ -61,9 +61,10 @@ interface FolderTreeNode {
 
 interface AIAttachmentsViewProps {
   onProcessSuccess: () => void;
+  isSuperAdmin?: boolean;
 }
 
-export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsViewProps) {
+export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = true }: AIAttachmentsViewProps) {
   // Config & Data States
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [cloudName, setCloudName] = useState<string | null>(null);
@@ -1080,13 +1081,17 @@ export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsVie
                             >
                               <Move className="w-3 h-3 text-slate-400" /> Move File
                             </button>
-                            <div className="border-t border-slate-100 my-1"></div>
-                            <button
-                              onClick={() => setDeleteFile(file)}
-                              className="w-full px-3 py-1.5 hover:bg-rose-50 text-rose-600 flex items-center gap-2 cursor-pointer font-medium"
-                            >
-                              <Trash2 className="w-3 h-3 text-rose-400" /> Delete
-                            </button>
+                            {isSuperAdmin && (
+                              <>
+                                <div className="border-t border-slate-100 my-1"></div>
+                                <button
+                                  onClick={() => setDeleteFile(file)}
+                                  className="w-full px-3 py-1.5 hover:bg-rose-50 text-rose-600 flex items-center gap-2 cursor-pointer font-medium"
+                                >
+                                  <Trash2 className="w-3 h-3 text-rose-400" /> Delete
+                                </button>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1181,13 +1186,17 @@ export default function AIAttachmentsView({ onProcessSuccess }: AIAttachmentsVie
                                   >
                                     <Move className="w-3 h-3 text-slate-400" /> Move File
                                   </button>
-                                  <div className="border-t border-slate-100 my-1"></div>
-                                  <button
-                                    onClick={() => setDeleteFile(file)}
-                                    className="w-full px-3 py-1.5 hover:bg-rose-50 text-rose-600 flex items-center gap-2 cursor-pointer font-medium"
-                                  >
-                                    <Trash2 className="w-3 h-3 text-rose-400" /> Delete
-                                  </button>
+                                  {isSuperAdmin && (
+                                    <>
+                                      <div className="border-t border-slate-100 my-1"></div>
+                                      <button
+                                        onClick={() => setDeleteFile(file)}
+                                        className="w-full px-3 py-1.5 hover:bg-rose-50 text-rose-600 flex items-center gap-2 cursor-pointer font-medium"
+                                      >
+                                        <Trash2 className="w-3 h-3 text-rose-400" /> Delete
+                                      </button>
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             </div>

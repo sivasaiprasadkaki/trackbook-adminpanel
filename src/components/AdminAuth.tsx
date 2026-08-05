@@ -21,7 +21,8 @@ export default function AdminAuth({ onSuccess, initialIsInitialized = null }: Ad
       setError('');
       console.log('[DEBUG] AdminAuth: Fetching session from /api/auth/session...');
       const res = await fetch('/api/auth/session', { credentials: 'include' });
-      if (res.ok) {
+      const contentType = res.headers.get('content-type');
+      if (res.ok && contentType && contentType.includes('application/json')) {
         const data = await res.json();
         console.log(`[DEBUG] SESSION: authenticated=${data.authenticated}`);
         

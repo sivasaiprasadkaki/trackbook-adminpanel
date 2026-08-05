@@ -20,9 +20,10 @@ const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(inp
 
 interface UsersViewProps {
   onRefreshStats?: () => void;
+  isSuperAdmin?: boolean;
 }
 
-export default function UsersView({ onRefreshStats }: UsersViewProps) {
+export default function UsersView({ onRefreshStats, isSuperAdmin = true }: UsersViewProps) {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -476,13 +477,15 @@ export default function UsersView({ onRefreshStats }: UsersViewProps) {
                       <Edit className="w-3.5 h-3.5" />
                       <span>Edit</span>
                     </button>
-                    <button
-                      onClick={() => handleDelete(user.id)}
-                      className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Delete</span>
-                    </button>
+                    {isSuperAdmin && (
+                      <button
+                        onClick={() => handleDelete(user.id)}
+                        className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -590,13 +593,15 @@ export default function UsersView({ onRefreshStats }: UsersViewProps) {
                             <Edit className="w-4 h-4" />
                           </button>
                           
-                          <button
-                            onClick={() => handleDelete(user.id)}
-                            title="Delete user from system"
-                            className="w-8 h-8 rounded-md flex items-center justify-center text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {isSuperAdmin && (
+                            <button
+                              onClick={() => handleDelete(user.id)}
+                              title="Delete user from system"
+                              className="w-8 h-8 rounded-md flex items-center justify-center text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

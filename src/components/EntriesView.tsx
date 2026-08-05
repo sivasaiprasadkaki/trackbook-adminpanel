@@ -31,9 +31,10 @@ const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(inp
 interface EntriesViewProps {
   onEntryLogged: () => void;
   entries: Entry[]; // Maintained for backward compatibility, but we fetch scoped entries dynamically
+  isSuperAdmin?: boolean;
 }
 
-export default function EntriesView({ onEntryLogged }: EntriesViewProps) {
+export default function EntriesView({ onEntryLogged, isSuperAdmin = true }: EntriesViewProps) {
   // Global directory states
   const [users, setUsers] = useState<AppUser[]>([]);
   const [cashbooks, setCashbooks] = useState<Cashbook[]>([]);
@@ -874,13 +875,15 @@ export default function EntriesView({ onEntryLogged }: EntriesViewProps) {
                               Attachment
                             </button>
                           )}
-                          <button
-                            onClick={() => handleDeleteEntry(e.id)}
-                            className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {isSuperAdmin && (
+                            <button
+                              onClick={() => handleDeleteEntry(e.id)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1007,13 +1010,15 @@ export default function EntriesView({ onEntryLogged }: EntriesViewProps) {
 
                           {/* Actions */}
                           <td className="py-3.5 px-4 text-center">
-                            <button
-                              onClick={() => handleDeleteEntry(e.id)}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-all cursor-pointer inline-flex items-center justify-center"
-                              title="Delete Transaction"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                            {isSuperAdmin && (
+                              <button
+                                onClick={() => handleDeleteEntry(e.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-all cursor-pointer inline-flex items-center justify-center"
+                                title="Delete Transaction"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
                           </td>
 
                         </tr>
@@ -1144,13 +1149,15 @@ export default function EntriesView({ onEntryLogged }: EntriesViewProps) {
                           {e.mode}
                         </span>
 
-                        <button
-                          onClick={() => handleDeleteEntry(e.id)}
-                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-all cursor-pointer"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {isSuperAdmin && (
+                          <button
+                            onClick={() => handleDeleteEntry(e.id)}
+                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-all cursor-pointer"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
 
                     </div>

@@ -98,4 +98,7 @@ export interface DashboardStats {
   schemaMissing?: boolean;
   aiProcessed?: number;
   manualProcessed?: number;
+  attachmentsCount?: number;
+  aiAttachmentsCount?: number;
+  totalAttachments?: number;
 }

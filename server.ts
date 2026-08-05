@@ -159,91 +159,81 @@ async function runStartupVerification() {
     console.error(`[STARTUP EXCEPTION] Failed to query admin_users: ${err.message}`);
   }
 
-  // 7. Auto-seed first admin if empty
-  await autoSeedFirstAdmin();
+  // 7. Auto-seed admin credentials if missing
+  await autoSeedAdmins();
 }
 
-async function autoSeedFirstAdmin() {
-  const adminClient = getSupabaseAdmin();
-  if (!adminClient) {
-    console.error('[AUTO-SEED] Could not initialize Admin Client.');
-    return;
-  }
-
-  try {
-    // Check if any admin users exist in database
-    const { count, error } = await adminClient
-      .from('admin_users')
-      .select('id', { count: 'exact', head: true });
-
-    if (error) {
-      console.warn(`[AUTO-SEED] admin_users table check failed or does not exist: ${error.message}`);
-      // Fallback local JSON file check
-      const fallbackAdmins = readFallbackAdmins();
-      if (fallbackAdmins.length === 0) {
-        const hashedPassword = await bcrypt.hash('Siva@122', 12);
-        const newAdmin = {
-          id: crypto.randomUUID(),
-          username: 'SivasaiPrasad',
-          password_hash: hashedPassword,
-          full_name: 'Siva Sai Prasad',
-          role: 'super_admin',
-          status: 'active',
-          last_login_at: null,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        };
-        fallbackAdmins.push(newAdmin);
-        writeFallbackAdmins(fallbackAdmins);
-        console.log('[AUTO-SEED SUCCESS] First administrator created successfully.');
-      }
-      return;
+async function autoSeedAdmins() {
+  const defaultAdmins = [
+    {
+      username: 'SivasaiPrasad',
+      password: 'Siva@122',
+      full_name: 'Siva Sai Prasad',
+      role: 'super_admin'
+    },
+    {
+      username: 'karthikC',
+      password: 'Ckarthik',
+      full_name: 'Karthik C',
+      role: 'admin'
     }
+  ];
 
-    if (count === 0) {
-      const hashedPassword = await bcrypt.hash('Siva@122', 12);
-      const newAdmin = {
+  const adminClient = getSupabaseAdmin();
+  let fallbackAdmins = readFallbackAdmins();
+
+  for (const item of defaultAdmins) {
+    let fallbackUser = fallbackAdmins.find(a => a.username.toLowerCase() === item.username.toLowerCase());
+    if (!fallbackUser) {
+      const hashedPassword = await bcrypt.hash(item.password, 12);
+      fallbackUser = {
         id: crypto.randomUUID(),
-        username: 'SivasaiPrasad',
+        username: item.username,
         password_hash: hashedPassword,
-        full_name: 'Siva Sai Prasad',
-        role: 'super_admin',
+        full_name: item.full_name,
+        role: item.role,
         status: 'active',
         last_login_at: null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
-
-      const { data, error: insertError } = await adminClient
-        .from('admin_users')
-        .insert(newAdmin)
-        .select();
-
-      if (insertError) {
-        console.error(`[AUTO-SEED ERROR] Failed to insert first Super Admin: ${insertError.message}`);
-      } else {
-        console.log('[AUTO-SEED SUCCESS] First administrator created successfully.');
-      }
-
-      // Sync fallback JSON file
-      const fallbackAdmins = readFallbackAdmins();
-      if (fallbackAdmins.length === 0) {
-        fallbackAdmins.push(newAdmin);
-        writeFallbackAdmins(fallbackAdmins);
-      }
+      fallbackAdmins.push(fallbackUser);
     }
 
-    // Verify exactly one administrator exists
-    const { count: verifyCount } = await adminClient
-      .from('admin_users')
-      .select('id', { count: 'exact', head: true });
-    
-    if (verifyCount === 1) {
-      console.log('[AUTO-SEED VERIFICATION] Verified exactly one administrator exists in database.');
+    if (adminClient) {
+      try {
+        const { data: existing } = await adminClient
+          .from('admin_users')
+          .select('id, username')
+          .ilike('username', item.username);
+
+        if (!existing || existing.length === 0) {
+          const hashedPassword = fallbackUser ? fallbackUser.password_hash : await bcrypt.hash(item.password, 12);
+          const newDbAdmin = {
+            id: fallbackUser ? fallbackUser.id : crypto.randomUUID(),
+            username: item.username,
+            password_hash: hashedPassword,
+            full_name: item.full_name,
+            role: item.role,
+            status: 'active',
+            last_login_at: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          };
+          const { error: insErr } = await adminClient.from('admin_users').insert(newDbAdmin);
+          if (insErr) {
+            console.warn(`[AUTO-SEED] Could not insert admin ${item.username} into DB:`, insErr.message);
+          } else {
+            console.log(`[AUTO-SEED SUCCESS] Admin user ${item.username} inserted into database.`);
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[AUTO-SEED] Exception checking admin ${item.username} in DB:`, err.message);
+      }
     }
-  } catch (err: any) {
-    console.error(`[AUTO-SEED EXCEPTION] Error during auto-seeding first admin: ${err.message}`);
   }
+
+  writeFallbackAdmins(fallbackAdmins);
 }
 
 
@@ -811,6 +801,7 @@ function requireAuth(req: any, res: any, next: any) {
     }
     // Session is valid
     if (session.user) {
+      req.adminUser = session.user;
       touchUserPresence(session.user.id);
       touchUserPresence(session.user.username);
       touchUserPresence(session.user.full_name);
@@ -820,6 +811,14 @@ function requireAuth(req: any, res: any, next: any) {
   } catch (err) {
     return res.status(401).json({ error: 'Unauthorized: Invalid session' });
   }
+}
+
+// Middleware to restrict delete operations exclusively to Super Admins
+function requireSuperAdmin(req: any, res: any, next: any) {
+  if (!req.adminUser || req.adminUser.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Forbidden: Delete option is restricted to Super Admin only.' });
+  }
+  next();
 }
 
 app.use(requireAuth);
@@ -1011,6 +1010,9 @@ app.get('/api/stats', async (req, res) => {
       storageLimit: storageLimitGB,
       aiProcessed: aiProcessed,
       manualProcessed: manualProcessed,
+      attachmentsCount: attCount || 0,
+      aiAttachmentsCount: aiAttCount || 0,
+      totalAttachments: totalFiles,
       supabaseConfigured: true,
       schemaMissing: false
     });
@@ -1441,7 +1443,7 @@ app.put('/api/users/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', async (req, res) => {
+app.delete('/api/users/:id', requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
   const supabase = getSupabaseAdmin();
 
@@ -1704,6 +1706,38 @@ app.post('/api/cashbooks', async (req, res) => {
   }
 });
 
+app.delete('/api/cashbooks/:id', requireSuperAdmin, async (req, res) => {
+  const { id } = req.params;
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase configuration is missing.' });
+  }
+
+  try {
+    // Delete associated entries first to avoid foreign key constraints
+    const { error: entriesErr } = await supabase
+      .from('entries')
+      .delete()
+      .eq('cashbook_id', id);
+
+    if (entriesErr) {
+      console.warn(`[DELETE CASHBOOK] Warning when deleting entries for cashbook ${id}:`, entriesErr.message);
+    }
+
+    const { error } = await supabase
+      .from('cashbooks')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    res.json({ success: true, message: 'Cashbook and associated entries deleted successfully.' });
+  } catch (err: any) {
+    console.error('Supabase cashbook delete error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Entries
 app.get('/api/entries', async (req, res) => {
   console.log('[DEBUG] Entries load started...');
@@ -1896,7 +1930,7 @@ app.post('/api/entries', async (req, res) => {
   }
 });
 
-app.delete('/api/entries/:id', async (req, res) => {
+app.delete('/api/entries/:id', requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
   const supabase = getSupabaseAdmin();
   if (!supabase) {
@@ -2165,7 +2199,7 @@ app.get('/api/attachments', async (req, res) => {
   }
 });
 
-app.delete('/api/attachments/:id', async (req, res) => {
+app.delete('/api/attachments/:id', requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
   const supabase = getSupabaseAdmin();
   if (!supabase) {
@@ -2528,7 +2562,7 @@ app.get('/api/cloudinary/resources', async (req, res) => {
 });
 
 // 3. Delete resource from Cloudinary
-app.delete('/api/cloudinary/resources', async (req, res) => {
+app.delete('/api/cloudinary/resources', requireSuperAdmin, async (req, res) => {
   if (!isCloudinaryConfigured) {
     return res.status(400).json({ error: 'Cloudinary is not configured.' });
   }
@@ -2580,6 +2614,20 @@ app.post('/api/reset', async (req, res) => {
     success: true,
     message: "Production database is the single source of truth and cannot be reset."
   });
+});
+
+// Catch-all 404 handler for unmatched /api routes so client receives valid JSON instead of HTML
+app.use('/api/*', (req, res) => {
+  res.status(404).json({ error: `API route not found: ${req.originalUrl}` });
+});
+
+// Express global error handler for /api routes
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.path && req.path.startsWith('/api')) {
+    console.error('[SERVER API ERROR]', err);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+  next(err);
 });
 
 // Configure Vite middleware or static serving

@@ -9,6 +9,8 @@ import {
   Settings,
   BookOpenText,
   LogOut,
+  ShieldCheck,
+  User,
   X
 } from 'lucide-react';
 
@@ -18,9 +20,10 @@ interface SidebarProps {
   onLogout?: () => void;
   isOpen?: boolean;
   onClose?: () => void;
+  currentUser?: { username: string; role: string; full_name?: string } | null;
 }
 
-export default function Sidebar({ currentTab, onTabChange, onLogout, isOpen = false, onClose }: SidebarProps) {
+export default function Sidebar({ currentTab, onTabChange, onLogout, isOpen = false, onClose, currentUser }: SidebarProps) {
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'users', label: 'Users', icon: Users },
@@ -85,11 +88,31 @@ export default function Sidebar({ currentTab, onTabChange, onLogout, isOpen = fa
       </div>
 
       {/* Bottom Settings & Logout Links */}
-      <div className="px-4 pt-4 border-t border-slate-100 space-y-1">
+      <div className="px-4 pt-4 border-t border-slate-100 space-y-2">
+        {currentUser && (
+          <div className="mx-1 p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                currentUser.role === 'super_admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
+              }`}>
+                {currentUser.role === 'super_admin' ? <ShieldCheck className="w-4 h-4" /> : <User className="w-4 h-4" />}
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-slate-800 truncate">{currentUser.full_name || currentUser.username}</p>
+                <span className={`inline-block text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                  currentUser.role === 'super_admin' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
+                }`}>
+                  {currentUser.role === 'super_admin' ? 'Super Admin' : 'Admin'}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
         <Link
           to="/settings"
           onClick={() => handleLinkClick('settings')}
-          className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-150 ease-in-out group ${
+          className={`flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ease-in-out group ${
             currentTab === 'settings'
               ? 'bg-blue-50 text-blue-600 border-r-4 border-blue-600 font-bold'
               : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
@@ -106,7 +129,7 @@ export default function Sidebar({ currentTab, onTabChange, onLogout, isOpen = fa
             if (onLogout) onLogout();
             if (onClose) onClose();
           }}
-          className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-150 ease-in-out text-rose-600 hover:bg-rose-50 hover:text-rose-700 group cursor-pointer"
+          className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ease-in-out text-rose-600 hover:bg-rose-50 hover:text-rose-700 group cursor-pointer"
         >
           <LogOut className="w-5 h-5 text-rose-400 group-hover:text-rose-600 transition-colors" />
           <span>Log Out</span>

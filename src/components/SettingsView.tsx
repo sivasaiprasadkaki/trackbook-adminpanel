@@ -17,9 +17,10 @@ const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(inp
 
 interface SettingsViewProps {
   onResetDatabase: () => void;
+  isSuperAdmin?: boolean;
 }
 
-export default function SettingsView({ onResetDatabase }: SettingsViewProps) {
+export default function SettingsView({ onResetDatabase, isSuperAdmin = true }: SettingsViewProps) {
   const [profile, setProfile] = useState({
     name: 'Triptraccker Admin',
     email: 'triptraccker@gmail.com',

@@ -31,7 +31,11 @@ import { AuditAttachment, Cashbook, User as AppUser, Entry } from '../types';
 
 const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(input, { ...init, credentials: 'include' });
 
-export default function AttachmentsView() {
+interface AttachmentsViewProps {
+  isSuperAdmin?: boolean;
+}
+
+export default function AttachmentsView({ isSuperAdmin = true }: AttachmentsViewProps) {
   // Directory Lists
   const [users, setUsers] = useState<AppUser[]>([]);
   const [cashbooks, setCashbooks] = useState<Cashbook[]>([]);
@@ -778,13 +782,15 @@ export default function AttachmentsView() {
                                   <ExternalLink className="w-3.5 h-3.5" />
                                 </button>
                               )}
-                              <button
-                                onClick={() => setDeletingId(att.id)}
-                                title="Delete Attachment"
-                                className="w-8 h-8 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 flex items-center justify-center shadow-xs cursor-pointer transition-colors"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              {isSuperAdmin && (
+                                <button
+                                  onClick={() => setDeletingId(att.id)}
+                                  title="Delete Attachment"
+                                  className="w-8 h-8 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 flex items-center justify-center shadow-xs cursor-pointer transition-colors"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -911,13 +917,15 @@ export default function AttachmentsView() {
                                 <ExternalLink className="w-3 h-3" />
                               </button>
                             )}
-                            <button
-                              onClick={() => setDeletingId(att.id)}
-                              className="w-7 h-7 rounded bg-rose-50 border border-rose-100 hover:bg-rose-100 text-rose-600 flex items-center justify-center transition-colors cursor-pointer"
-                              title="Delete"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
+                            {isSuperAdmin && (
+                              <button
+                                onClick={() => setDeletingId(att.id)}
+                                className="w-7 h-7 rounded bg-rose-50 border border-rose-100 hover:bg-rose-100 text-rose-600 flex items-center justify-center transition-colors cursor-pointer"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>

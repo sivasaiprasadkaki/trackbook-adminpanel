@@ -13,7 +13,11 @@ import {
   Search,
   Database,
   AlertTriangle,
-  CheckCircle2
+  CheckCircle2,
+  Paperclip,
+  ChevronDown,
+  Sparkles,
+  FileText
 } from 'lucide-react';
 import { Entry, DashboardStats } from '../types';
 
@@ -40,13 +44,16 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
 
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [attachmentDropdownOpen, setAttachmentDropdownOpen] = useState(false);
+  const [attachmentCardType, setAttachmentCardType] = useState<'all' | 'attachments' | 'ai-attachments'>('all');
 
   // Fetch server stats
   const fetchStats = async () => {
     try {
       setLoading(true);
       const res = await fetch('/api/stats');
-      if (res.ok) {
+      const contentType = res.headers.get('content-type');
+      if (res.ok && contentType && contentType.includes('application/json')) {
         const data = await res.json();
         setStats(data);
       }
@@ -222,7 +229,7 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
       )}
 
       {/* Stats Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {/* Total Users */}
         <div className="bg-white border border-slate-200 rounded-xl p-6 hover:border-blue-500 transition-all duration-200 card-shadow group cursor-pointer" onClick={() => onNavigateToTab('users')}>
           <div className="flex justify-between items-start mb-4">
@@ -299,6 +306,128 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
               <TrendingUp className={`w-3.5 h-3.5 ${stats.totalRevenue < 0 ? 'rotate-180 text-rose-600' : 'text-emerald-600'}`} /> {stats.totalRevenue < 0 ? '-14.2%' : '+8.4%'}
             </span>
             <span className="text-slate-500 font-sans">vs last month</span>
+          </div>
+        </div>
+
+        {/* Attachments Card */}
+        <div 
+          className="bg-white border border-slate-200 rounded-xl p-6 hover:border-teal-500 transition-all duration-200 card-shadow group cursor-pointer relative"
+          onClick={() => {
+            if (attachmentCardType === 'ai-attachments') {
+              onNavigateToTab('ai-attachments');
+            } else {
+              onNavigateToTab('attachments');
+            }
+          }}
+        >
+          <div className="flex justify-between items-start mb-4">
+            <span className="text-slate-500 text-xs font-semibold uppercase tracking-wider truncate max-w-[110px]" title="Attachments">
+              {attachmentCardType === 'all' && 'Attachments'}
+              {attachmentCardType === 'attachments' && 'Std Files'}
+              {attachmentCardType === 'ai-attachments' && 'AI Files'}
+            </span>
+
+            {/* Icon and Dropdown Arrow */}
+            <div className="flex items-center gap-1 relative shrink-0">
+              <div className="w-8 h-8 rounded-lg bg-teal-50 flex items-center justify-center text-teal-600">
+                <Paperclip className="w-4 h-4" />
+              </div>
+              
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAttachmentDropdownOpen(!attachmentDropdownOpen);
+                }}
+                className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                title="Select Attachments View"
+              >
+                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${attachmentDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Dropdown Menu */}
+              {attachmentDropdownOpen && (
+                <div 
+                  className="absolute right-0 top-10 w-52 bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 z-30 animate-fade-in text-xs"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100">
+                    Navigate & View
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAttachmentCardType('all');
+                      setAttachmentDropdownOpen(false);
+                      onNavigateToTab('attachments');
+                    }}
+                    className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 cursor-pointer ${attachmentCardType === 'all' ? 'font-bold text-teal-700 bg-teal-50/60' : 'text-slate-700'}`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Paperclip className="w-3.5 h-3.5 text-teal-600" />
+                      <span>All Attachments</span>
+                    </span>
+                    <span className="font-mono text-slate-500 font-bold">
+                      {(stats.totalAttachments ?? ((stats.attachmentsCount ?? 0) + (stats.aiAttachmentsCount ?? 0))).toLocaleString('en-IN')}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAttachmentCardType('attachments');
+                      setAttachmentDropdownOpen(false);
+                      onNavigateToTab('attachments');
+                    }}
+                    className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 cursor-pointer ${attachmentCardType === 'attachments' ? 'font-bold text-blue-700 bg-blue-50/60' : 'text-slate-700'}`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <FileText className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Attachments</span>
+                    </span>
+                    <span className="font-mono text-slate-500 font-bold">
+                      {(stats.attachmentsCount ?? 0).toLocaleString('en-IN')}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAttachmentCardType('ai-attachments');
+                      setAttachmentDropdownOpen(false);
+                      onNavigateToTab('ai-attachments');
+                    }}
+                    className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 cursor-pointer ${attachmentCardType === 'ai-attachments' ? 'font-bold text-purple-700 bg-purple-50/60' : 'text-slate-700'}`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                      <span>AI Attachments</span>
+                    </span>
+                    <span className="font-mono text-slate-500 font-bold">
+                      {(stats.aiAttachmentsCount ?? 0).toLocaleString('en-IN')}
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="text-2xl font-bold text-slate-900 tracking-tight">
+            {attachmentCardType === 'all' && (stats.totalAttachments ?? ((stats.attachmentsCount ?? 0) + (stats.aiAttachmentsCount ?? 0))).toLocaleString('en-IN')}
+            {attachmentCardType === 'attachments' && (stats.attachmentsCount ?? 0).toLocaleString('en-IN')}
+            {attachmentCardType === 'ai-attachments' && (stats.aiAttachmentsCount ?? 0).toLocaleString('en-IN')}
+          </div>
+
+          <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100 text-xs">
+            <span className="text-slate-500 flex items-center gap-1 text-[11px]">
+              <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+              Std: <strong className="text-slate-700">{(stats.attachmentsCount ?? 0)}</strong>
+            </span>
+            <span className="text-slate-500 flex items-center gap-1 text-[11px]">
+              <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+              AI: <strong className="text-slate-700">{(stats.aiAttachmentsCount ?? 0)}</strong>
+            </span>
           </div>
         </div>
       </div>
