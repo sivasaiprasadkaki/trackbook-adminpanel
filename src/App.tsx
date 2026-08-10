@@ -107,14 +107,16 @@ export default function App() {
     setSearchValue('');
   }, [location.pathname]);
 
-  // Track Admin User Activity Roaming & Duration across sections
+  // Track User Activity Roaming & Duration across sections
   useEffect(() => {
     if (!isAuthenticated || !currentUser) return;
 
     const startTime = Date.now();
     const tabName = currentTab.charAt(0).toUpperCase() + currentTab.slice(1);
-    const userName = currentUser.full_name || currentUser.username || 'Admin User';
-    const userRole = currentUser.role === 'super_admin' ? 'Super Admin' : 'Admin';
+    const userName = currentUser.full_name || currentUser.username || 'User';
+    const isUserAdmin = currentUser.role === 'super_admin' || currentUser.role === 'admin' || (currentUser.role || '').toLowerCase().includes('admin');
+    const userRole = isUserAdmin ? (currentUser.role === 'super_admin' ? 'Super Admin' : 'Admin') : (currentUser.role || 'User');
+    const userType: 'Admin' | 'Customer' = isUserAdmin ? 'Admin' : 'Customer';
 
     // Log section entry
     fetch('/api/audit-logs', {
@@ -123,7 +125,7 @@ export default function App() {
       body: JSON.stringify({
         user_name: userName,
         user_role: userRole,
-        user_type: 'Admin',
+        user_type: userType,
         action: `Navigated to ${tabName} Section`,
         details: `Active roaming & inspecting ${tabName} panel`,
         format: 'System',
@@ -140,7 +142,7 @@ export default function App() {
         body: JSON.stringify({
           user_name: userName,
           user_role: userRole,
-          user_type: 'Admin',
+          user_type: userType,
           action: `Roamed in ${tabName} Section`,
           details: `Spent ${minutesSpent} minute(s) active in ${tabName} section`,
           format: 'System',

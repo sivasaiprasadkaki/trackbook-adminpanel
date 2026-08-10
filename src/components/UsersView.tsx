@@ -470,6 +470,20 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
     link.click();
     document.body.removeChild(link);
     triggerNotification('Users registry exported to CSV format.');
+
+    // Log export event to audit logs
+    fetch('/api/audit-logs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_name: 'Customer / User Manager',
+        user_role: 'User',
+        user_type: 'Customer',
+        action: 'Excel/CSV User Directory Export',
+        details: 'Exported complete user registry to CSV file',
+        format: 'Excel'
+      })
+    }).catch(() => {});
   };
 
   // Dynamic calculations for real stats

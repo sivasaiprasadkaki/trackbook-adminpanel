@@ -198,6 +198,21 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true }: Entr
 
       if (res.ok) {
         showNotification('Transaction recorded successfully!');
+        
+        // Log user audit activity
+        fetch('/api/audit-logs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_name: selectedUser?.name || selectedUser?.email || 'Customer User',
+            user_role: selectedUser?.role || 'User',
+            user_type: selectedUser?.role?.toLowerCase().includes('admin') ? 'Admin' : 'Customer',
+            action: `Transaction Recorded (${formData.type === 'out' ? 'Cash Out' : 'Cash In'})`,
+            details: `Recorded ₹${formData.amount} - ${formData.description} (${formData.category})`,
+            format: 'Cashbook'
+          })
+        }).catch(() => {});
+
         setFormData(prev => ({
           ...prev,
           description: '',
@@ -229,6 +244,21 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true }: Entr
 
       if (res.ok) {
         showNotification('Transaction deleted successfully!');
+
+        // Log user audit activity
+        fetch('/api/audit-logs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_name: selectedUser?.name || selectedUser?.email || 'Customer User',
+            user_role: selectedUser?.role || 'User',
+            user_type: selectedUser?.role?.toLowerCase().includes('admin') ? 'Admin' : 'Customer',
+            action: 'Transaction Deleted',
+            details: `Deleted transaction entry ${entryId}`,
+            format: 'Cashbook'
+          })
+        }).catch(() => {});
+
         if (selectedCashbook) {
           fetchEntriesForCashbook(selectedCashbook.id);
         }
