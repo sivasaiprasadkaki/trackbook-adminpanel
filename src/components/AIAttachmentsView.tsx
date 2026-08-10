@@ -592,28 +592,6 @@ export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = tru
     );
   };
 
-  // Handle Unconfigured State
-  if (configured === false) {
-    return (
-      <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-2xl mx-auto mt-12 text-center shadow-sm">
-        <Database className="w-16 h-16 text-blue-500 mx-auto mb-4 animate-pulse" />
-        <h2 className="text-xl font-bold text-slate-900 font-sans tracking-tight">Cloudary Storage Offline</h2>
-        <p className="text-slate-500 text-sm mt-2 max-w-md mx-auto leading-relaxed">
-          Cloudary Manager requires direct connection to the production Cloudinary environment.
-          Please declare your account details securely using settings panel:
-        </p>
-        <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 my-6 text-left font-mono text-xs text-slate-600 max-w-md mx-auto space-y-2">
-          <div>CLOUDINARY_CLOUD_NAME=your_cloud_name</div>
-          <div>CLOUDINARY_API_KEY=your_api_key</div>
-          <div>CLOUDINARY_API_SECRET=your_api_secret</div>
-        </div>
-        <div className="text-xs text-slate-400">
-          * Refer to the <strong>.env.example</strong> file in your directory root. Secrets are securely hidden server-side.
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
       {/* Dynamic Status Banner */}
@@ -663,6 +641,23 @@ export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = tru
       {/* Sub-Tab View Rendering */}
       {cloudSubTab === 'monitoring' ? (
         <UserMonitoringView isSuperAdmin={isSuperAdmin} />
+      ) : configured === false ? (
+        <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-2xl mx-auto mt-6 text-center shadow-sm">
+          <Database className="w-16 h-16 text-blue-500 mx-auto mb-4 animate-pulse" />
+          <h2 className="text-xl font-bold text-slate-900 font-sans tracking-tight">Cloudary Storage Offline</h2>
+          <p className="text-slate-500 text-sm mt-2 max-w-md mx-auto leading-relaxed">
+            Cloudary Manager requires direct connection to the production Cloudinary environment.
+            Please declare your account details securely using settings panel:
+          </p>
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 my-6 text-left font-mono text-xs text-slate-600 max-w-md mx-auto space-y-2">
+            <div>CLOUDINARY_CLOUD_NAME=your_cloud_name</div>
+            <div>CLOUDINARY_API_KEY=your_api_key</div>
+            <div>CLOUDINARY_API_SECRET=your_api_secret</div>
+          </div>
+          <div className="text-xs text-slate-400">
+            * Refer to the <strong>.env.example</strong> file in your directory root. Secrets are securely hidden server-side.
+          </div>
+        </div>
       ) : (
         /* Main Container Grid for Cloud Storage */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">

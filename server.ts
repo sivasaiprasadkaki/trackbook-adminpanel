@@ -1648,7 +1648,7 @@ app.post('/api/audit-logs', async (req: any, res: any) => {
       details: details || '',
       format: format || 'System',
       ip_address: req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1',
-      duration_mins: duration_mins || Math.floor(Math.random() * 30) + 10
+      duration_mins: (duration_mins !== undefined && duration_mins !== null) ? Number(duration_mins) : 1
     };
 
     logs.unshift(newLog);
