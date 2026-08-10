@@ -67,8 +67,8 @@ interface AIAttachmentsViewProps {
 }
 
 export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = true }: AIAttachmentsViewProps) {
-  // Cloud Section Navigation Sub-Tabs
-  const [cloudSubTab, setCloudSubTab] = useState<'monitoring' | 'storage'>(isSuperAdmin ? 'monitoring' : 'storage');
+  // Cloud Section Navigation Sub-Tabs: default to 'monitoring' so User Activity Monitoring & Tracking opens directly
+  const [cloudSubTab, setCloudSubTab] = useState<'monitoring' | 'storage'>('monitoring');
 
   // Config & Data States
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -626,44 +626,42 @@ export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = tru
       )}
 
       {/* Cloud Top Navigation Switcher */}
-      {isSuperAdmin && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-2 shadow-xs flex items-center justify-between gap-3">
-          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl w-full sm:w-auto">
-            <button
-              onClick={() => setCloudSubTab('monitoring')}
-              className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
-                cloudSubTab === 'monitoring'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-              }`}
-            >
-              <Activity className="w-4 h-4" />
-              <span>User Activity Monitoring & Tracking</span>
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping ml-0.5"></span>
-            </button>
+      <div className="bg-white border border-slate-200 rounded-2xl p-2 shadow-xs flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl w-full sm:w-auto">
+          <button
+            onClick={() => setCloudSubTab('monitoring')}
+            className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+              cloudSubTab === 'monitoring'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+            }`}
+          >
+            <Activity className="w-4 h-4" />
+            <span>User Activity Monitoring & Tracking</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping ml-0.5"></span>
+          </button>
 
-            <button
-              onClick={() => setCloudSubTab('storage')}
-              className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
-                cloudSubTab === 'storage'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-              }`}
-            >
-              <Database className="w-4 h-4" />
-              <span>Cloud Storage Manager</span>
-            </button>
-          </div>
-
-          <div className="hidden md:flex items-center gap-2 px-3 text-xs text-slate-500 font-medium">
-            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-            <span>Cloud Section Active</span>
-          </div>
+          <button
+            onClick={() => setCloudSubTab('storage')}
+            className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+              cloudSubTab === 'storage'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+            }`}
+          >
+            <Database className="w-4 h-4" />
+            <span>Cloud Storage Manager</span>
+          </button>
         </div>
-      )}
+
+        <div className="hidden md:flex items-center gap-2 px-3 text-xs text-slate-500 font-medium">
+          <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+          <span>Cloud Section Active</span>
+        </div>
+      </div>
 
       {/* Sub-Tab View Rendering */}
-      {isSuperAdmin && cloudSubTab === 'monitoring' ? (
+      {cloudSubTab === 'monitoring' ? (
         <UserMonitoringView isSuperAdmin={isSuperAdmin} />
       ) : (
         /* Main Container Grid for Cloud Storage */

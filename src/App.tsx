@@ -107,6 +107,49 @@ export default function App() {
     setSearchValue('');
   }, [location.pathname]);
 
+  // Track Admin User Activity Roaming & Duration across sections
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser) return;
+
+    const startTime = Date.now();
+    const tabName = currentTab.charAt(0).toUpperCase() + currentTab.slice(1);
+    const userName = currentUser.full_name || currentUser.username || 'Admin User';
+    const userRole = currentUser.role === 'super_admin' ? 'Super Admin' : 'Admin';
+
+    // Log section entry
+    fetch('/api/audit-logs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_name: userName,
+        user_role: userRole,
+        user_type: 'Admin',
+        action: `Navigated to ${tabName} Section`,
+        details: `Active roaming & inspecting ${tabName} panel`,
+        format: 'System',
+        duration_mins: 1
+      })
+    }).catch(() => {});
+
+    // Log roaming duration when leaving the section or unmounting
+    return () => {
+      const minutesSpent = Math.max(1, Math.round((Date.now() - startTime) / 60000));
+      fetch('/api/audit-logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_name: userName,
+          user_role: userRole,
+          user_type: 'Admin',
+          action: `Roamed in ${tabName} Section`,
+          details: `Spent ${minutesSpent} minute(s) active in ${tabName} section`,
+          format: 'System',
+          duration_mins: minutesSpent
+        })
+      }).catch(() => {});
+    };
+  }, [currentTab, isAuthenticated, currentUser]);
+
   // Presence heartbeat for real-time live user detection
   useEffect(() => {
     if (!isAuthenticated) return;
