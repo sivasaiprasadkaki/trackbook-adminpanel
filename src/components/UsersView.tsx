@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Users,
   UserCheck,
@@ -38,7 +38,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
-  const [activeTab, setActiveTab] = useState<'all' | 'live' | 'today'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'live' | 'today' | 'admins'>('all');
 
   // Form State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -52,10 +52,14 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
     phone: '',
     status: 'Active' as 'Active' | 'Pending' | 'Inactive'
   });
+  const [autoConfirm, setAutoConfirm] = useState<boolean>(true);
 
   const [notification, setNotification] = useState<string | null>(null);
 
-  // Super Admin Role Assignment Modal States
+  // Super Admin Role Assignment & Admin Users List States
+  const [adminUsers, setAdminUsers] = useState<any[]>([]);
+  const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
+  const [editingAdminId, setEditingAdminId] = useState<string | null>(null);
   const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [assignFullName, setAssignFullName] = useState<string>('');
@@ -89,25 +93,114 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
     return `${clean.slice(0, 10)}_admin`;
   };
 
+  const fetchAdminUsers = async () => {
+    if (!isSuperAdmin) return;
+    try {
+      setIsAdminUsersLoading(true);
+      const res = await fetch('/api/admin/users/roles');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.admins)) {
+          setAdminUsers(data.admins);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching admin users:', err);
+    } finally {
+      setIsAdminUsersLoading(false);
+    }
+  };
+
   const openAssignRoleModal = (userToAssign?: User) => {
     setAssignError(null);
     setCreatedCredentials(null);
     setShowPassword(false);
 
     if (userToAssign) {
+      const matchingAdmin = adminUsers.find(a => 
+        a.id === userToAssign.id ||
+        (a.username && userToAssign.name && a.username.toLowerCase() === userToAssign.name.toLowerCase()) ||
+        (a.full_name && userToAssign.name && a.full_name.toLowerCase() === userToAssign.name.toLowerCase()) ||
+        (a.username && userToAssign.email && userToAssign.email.toLowerCase().includes(a.username.toLowerCase()))
+      );
+
+      if (matchingAdmin) {
+        setEditingAdminId(matchingAdmin.id);
+        setSelectedUserId(userToAssign.id);
+        setAssignFullName(matchingAdmin.full_name || userToAssign.name);
+        setAssignUsername(matchingAdmin.username || generateUsernameFromName(userToAssign.name));
+        setAssignPassword(''); // blank unless user wants to change password
+        setAssignRole(matchingAdmin.role === 'super_admin' ? 'super_admin' : 'admin');
+        setAssignPhone(userToAssign.phone || '');
+        setIsRoleModalOpen(true);
+        return;
+      }
+
+      if ((userToAssign.role || '').toLowerCase().includes('admin')) {
+        setEditingAdminId(userToAssign.id);
+        setSelectedUserId(userToAssign.id);
+        setAssignFullName(userToAssign.name);
+        setAssignUsername(generateUsernameFromName(userToAssign.name));
+        setAssignPassword('');
+        setAssignRole((userToAssign.role as string).toLowerCase().includes('super') ? 'super_admin' : 'admin');
+        setAssignPhone(userToAssign.phone || '');
+        setIsRoleModalOpen(true);
+        return;
+      }
+
+      setEditingAdminId(null);
       setSelectedUserId(userToAssign.id);
       setAssignFullName(userToAssign.name);
       setAssignPhone(userToAssign.phone || '');
       setAssignUsername(generateUsernameFromName(userToAssign.name));
+      setAssignPassword(generateRandomPassword());
+      setAssignRole('admin');
+      setIsRoleModalOpen(true);
     } else {
+      setEditingAdminId(null);
       setSelectedUserId('');
       setAssignFullName('');
       setAssignPhone('');
       setAssignUsername('');
+      setAssignPassword(generateRandomPassword());
+      setAssignRole('admin');
+      setIsRoleModalOpen(true);
     }
-    setAssignPassword(generateRandomPassword());
-    setAssignRole('admin');
+  };
+
+  const openEditAdminModal = (adminObj: any) => {
+    setEditingAdminId(adminObj.id);
+    setAssignError(null);
+    setCreatedCredentials(null);
+    setShowPassword(false);
+    setSelectedUserId(adminObj.id);
+    setAssignFullName(adminObj.full_name || '');
+    setAssignUsername(adminObj.username || '');
+    setAssignPassword(''); // blank unless updating
+    setAssignRole(adminObj.role === 'super_admin' ? 'super_admin' : 'admin');
+    setAssignPhone('');
     setIsRoleModalOpen(true);
+  };
+
+  const handleDeleteAdminUser = async (adminId: string, username: string) => {
+    if (!window.confirm(`Are you sure you want to revoke admin access for '${username}'?`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/admin/users/${adminId}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        triggerNotification(`Admin user '${username}' access removed successfully.`);
+        fetchAdminUsers();
+        fetchUsers();
+      } else {
+        const errData = await res.json();
+        alert(errData.error || 'Failed to delete admin.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete admin.');
+    }
   };
 
   const handleSelectMemberForRole = (userId: string) => {
@@ -128,8 +221,8 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
       setAssignError('Username is required.');
       return;
     }
-    if (!assignPassword.trim() || assignPassword.length < 6) {
-      setAssignError('Password must be at least 6 characters.');
+    if (!editingAdminId && (!assignPassword.trim() || assignPassword.length < 4)) {
+      setAssignError('Password must be at least 4 characters.');
       return;
     }
     if (!assignFullName.trim()) {
@@ -139,13 +232,17 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
 
     setAssignLoading(true);
     try {
-      const res = await fetch('/api/admin/users/assign-role', {
-        method: 'POST',
+      const isEditing = Boolean(editingAdminId);
+      const url = isEditing ? `/api/admin/users/${editingAdminId}` : '/api/admin/users/assign-role';
+      const method = isEditing ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: selectedUserId || undefined,
           username: assignUsername.trim(),
-          password: assignPassword.trim(),
+          password: assignPassword.trim() || undefined,
           full_name: assignFullName.trim(),
           role: assignRole
         })
@@ -153,18 +250,23 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
 
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to assign role.');
+        throw new Error(data.error || 'Failed to save role/credentials.');
       }
 
-      setCreatedCredentials({
-        username: assignUsername.trim(),
-        password: assignPassword.trim(),
-        fullName: assignFullName.trim(),
-        role: assignRole,
-        phone: assignPhone.trim()
-      });
+      if (assignPassword.trim() || !isEditing) {
+        setCreatedCredentials({
+          username: assignUsername.trim(),
+          password: assignPassword.trim() || '(Unchanged)',
+          fullName: assignFullName.trim(),
+          role: assignRole,
+          phone: assignPhone.trim()
+        });
+      } else {
+        setIsRoleModalOpen(false);
+      }
 
-      triggerNotification(`Role '${assignRole === 'super_admin' ? 'Super Admin' : 'Admin'}' assigned to ${assignFullName}!`);
+      triggerNotification(isEditing ? `Admin '${assignUsername}' updated successfully!` : `Role '${assignRole === 'super_admin' ? 'Super Admin' : 'Admin'}' assigned to ${assignFullName}!`);
+      fetchAdminUsers();
       fetchUsers();
     } catch (err: any) {
       setAssignError(err.message || 'An error occurred.');
@@ -176,7 +278,11 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
   const handleShareWhatsApp = () => {
     if (!createdCredentials) return;
     const roleTitle = createdCredentials.role === 'super_admin' ? 'Super Admin' : 'Admin';
-    const msg = `Hello *${createdCredentials.fullName}*,\n\nYou have been granted *${roleTitle}* access in *TripTraccker Admin Portal*.\n\n🔑 *Login Credentials:*\n• *Username:* \`${createdCredentials.username}\`\n• *Password:* \`${createdCredentials.password}\`\n• *Role:* ${roleTitle}\n\n🌐 *Portal URL:*\n${window.location.origin}\n\nPlease login with these credentials.`;
+    const portalUrl = window.location.origin.includes('admin.trackbook.xyz') 
+      ? window.location.origin 
+      : 'https://admin.trackbook.xyz';
+
+    const msg = `Hello *${createdCredentials.fullName}*,\n\nYou have been granted *${roleTitle}* access in *TripTraccker Admin Portal*.\n\n🔑 *Login Credentials:*\n• *Username:* \`${createdCredentials.username}\`\n• *Password:* \`${createdCredentials.password}\`\n• *Role:* ${roleTitle}\n\n🌐 *Portal URL:*\n${portalUrl}\n\nPlease login with these credentials.`;
 
     const cleanPhone = createdCredentials.phone ? createdCredentials.phone.replace(/[^0-9]/g, '') : '';
     const waUrl = cleanPhone && cleanPhone.length >= 8
@@ -189,7 +295,11 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
   const handleCopyCredentials = () => {
     if (!createdCredentials) return;
     const roleTitle = createdCredentials.role === 'super_admin' ? 'Super Admin' : 'Admin';
-    const text = `TripTraccker Credentials:\nName: ${createdCredentials.fullName}\nRole: ${roleTitle}\nUsername: ${createdCredentials.username}\nPassword: ${createdCredentials.password}\nPortal URL: ${window.location.origin}`;
+    const portalUrl = window.location.origin.includes('admin.trackbook.xyz') 
+      ? window.location.origin 
+      : 'https://admin.trackbook.xyz';
+
+    const text = `TripTraccker Credentials:\nName: ${createdCredentials.fullName}\nRole: ${roleTitle}\nUsername: ${createdCredentials.username}\nPassword: ${createdCredentials.password}\nPortal URL: ${portalUrl}`;
     navigator.clipboard.writeText(text);
     triggerNotification('Credentials copied to clipboard!');
   };
@@ -247,15 +357,24 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
 
   useEffect(() => {
     fetchUsers(true);
+    if (isSuperAdmin) {
+      fetchAdminUsers();
+    }
     // Real-time auto-refresh interval for user status
-    const interval = setInterval(() => fetchUsers(false), 10000);
-    const handleGlobalRefresh = () => fetchUsers(true);
+    const interval = setInterval(() => {
+      fetchUsers(false);
+      if (isSuperAdmin) fetchAdminUsers();
+    }, 10000);
+    const handleGlobalRefresh = () => {
+      fetchUsers(true);
+      if (isSuperAdmin) fetchAdminUsers();
+    };
     window.addEventListener('app-global-refresh', handleGlobalRefresh);
     return () => {
       clearInterval(interval);
       window.removeEventListener('app-global-refresh', handleGlobalRefresh);
     };
-  }, []);
+  }, [isSuperAdmin]);
 
   const triggerNotification = (msg: string) => {
     setNotification(msg);
@@ -273,16 +392,31 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
       const url = isEditMode && selectedUser ? `/api/users/${selectedUser.id}` : '/api/users';
       const method = isEditMode ? 'PUT' : 'POST';
 
+      const statusVal = isEditMode
+        ? formData.status
+        : (autoConfirm ? 'Active' : 'Pending');
+
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({
+          ...formData,
+          status: statusVal,
+          autoConfirm: !isEditMode ? autoConfirm : undefined
+        })
       });
 
       if (res.ok) {
-        triggerNotification(isEditMode ? 'User profile updated successfully!' : 'New user registered successfully!');
+        triggerNotification(
+          isEditMode
+            ? 'User profile updated successfully!'
+            : autoConfirm
+              ? 'New user registered and auto-confirmed successfully!'
+              : 'New user registered! Email confirmation pending.'
+        );
         setIsModalOpen(false);
         setFormData({ name: '', role: 'User', email: '', phone: '', status: 'Active' });
+        setAutoConfirm(true);
         setSelectedUser(null);
         fetchUsers();
         if (onRefreshStats) onRefreshStats();
@@ -338,30 +472,86 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
     triggerNotification('Users registry exported to CSV format.');
   };
 
-  // Filters
-  const filteredUsers = users.filter(user => {
-    const matchesSearch = 
-      user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (user.phone && user.phone.includes(searchQuery));
-    
-    const matchesRole = roleFilter === 'All' || user.role === roleFilter;
-    const matchesStatus = statusFilter === 'All' || user.status === statusFilter;
-
-    let matchesTab = true;
-    if (activeTab === 'live') {
-      matchesTab = !!user.isOnline;
-    } else if (activeTab === 'today') {
-      matchesTab = isJoinedToday(user.joinedDate);
-    }
-
-    return matchesSearch && matchesRole && matchesStatus && matchesTab;
-  });
-
   // Dynamic calculations for real stats
   const totalUsersCount = users.length;
   const liveUsersCount = users.filter(u => u.isOnline).length;
   const newUsersTodayCount = users.filter(u => isJoinedToday(u.joinedDate)).length;
+  const adminUsersCount = adminUsers.length > 0 
+    ? adminUsers.length 
+    : users.filter(u => u.role === 'Admin' || u.role === 'Super Admin').length;
+
+  // Filters with Memoization
+  const filteredUsers = useMemo(() => {
+    let sourceList = users;
+
+    // If regular admin (not super admin), hide admin accounts from regular users list
+    if (!isSuperAdmin) {
+      sourceList = sourceList.filter(u => {
+        const roleLower = (u.role || '').toLowerCase();
+        const isAdminRole = roleLower.includes('admin');
+        const isListedAdmin = adminUsers.some(a => 
+          a.id === u.id ||
+          (a.username && u.name && a.username.toLowerCase() === u.name.toLowerCase()) ||
+          (a.full_name && u.name && a.full_name.toLowerCase() === u.name.toLowerCase())
+        );
+        return !isAdminRole && !isListedAdmin;
+      });
+    }
+
+    // If viewing admins tab, ensure all admin accounts are represented
+    if (activeTab === 'admins' && adminUsers.length > 0) {
+      const merged = [...users];
+      adminUsers.forEach(adm => {
+        const exists = merged.some(u => 
+          u.id === adm.id || 
+          (u.name && u.name.toLowerCase() === (adm.full_name || '').toLowerCase()) ||
+          (u.name && u.name.toLowerCase() === (adm.username || '').toLowerCase())
+        );
+        if (!exists) {
+          merged.push({
+            id: adm.id,
+            name: adm.full_name || adm.username,
+            email: `${adm.username}@trackbook.xyz`,
+            phone: '',
+            role: adm.role === 'super_admin' ? 'Admin' : 'Admin',
+            status: 'Active',
+            joinedDate: adm.created_at ? new Date(adm.created_at).toLocaleDateString() : 'Admin Account',
+            lastSeen: adm.last_login_at || new Date().toISOString(),
+            isOnline: adm.last_login_at ? (new Date().getTime() - new Date(adm.last_login_at).getTime() < 1000 * 60 * 5) : false
+          });
+        }
+      });
+      sourceList = merged;
+    }
+
+    return sourceList.filter(user => {
+      const matchesSearch = 
+        user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        user.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (user.phone && user.phone.includes(searchQuery));
+      
+      const matchesRole = roleFilter === 'All' || user.role === roleFilter;
+      const matchesStatus = statusFilter === 'All' || user.status === statusFilter;
+
+      let matchesTab = true;
+      if (activeTab === 'live') {
+        matchesTab = !!user.isOnline;
+      } else if (activeTab === 'today') {
+        matchesTab = isJoinedToday(user.joinedDate);
+      } else if (activeTab === 'admins') {
+        const roleLower = (user.role || '').toLowerCase();
+        const isRoleAdmin = roleLower.includes('admin');
+        const isListedAdmin = adminUsers.some(a => 
+          a.id === user.id ||
+          (a.username && a.username.toLowerCase() === user.name.toLowerCase()) ||
+          (a.full_name && a.full_name.toLowerCase() === user.name.toLowerCase())
+        );
+        matchesTab = isRoleAdmin || isListedAdmin;
+      }
+
+      return matchesSearch && matchesRole && matchesStatus && matchesTab;
+    });
+  }, [users, adminUsers, activeTab, searchQuery, roleFilter, statusFilter]);
 
   return (
     <div className="space-y-6">
@@ -411,31 +601,45 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
       </div>
 
       {/* Quick Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Stat 1 */}
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden group">
-          <div className="absolute -right-4 -top-4 w-24 h-24 bg-blue-500/5 rounded-full group-hover:scale-110 transition-transform"></div>
-          <div className="flex justify-between items-start mb-4 relative z-10">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${isSuperAdmin ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-4`}>
+        {/* Stat 1: Total Users */}
+        <div 
+          onClick={() => setActiveTab('all')}
+          className={`bg-white p-5 rounded-xl border transition-all cursor-pointer relative overflow-hidden group shadow-xs ${
+            activeTab === 'all'
+              ? 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/10'
+              : 'border-slate-200 hover:border-blue-300 hover:shadow-sm'
+          }`}
+        >
+          <div className="absolute -right-4 -top-4 w-20 h-20 bg-blue-500/5 rounded-full group-hover:scale-110 transition-transform"></div>
+          <div className="flex justify-between items-start mb-3 relative z-10">
             <div>
               <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Total Users</p>
               <h3 className="text-2xl font-bold text-slate-900 mt-1">{totalUsersCount}</h3>
             </div>
-            <div className="w-10 h-10 rounded bg-blue-50 flex items-center justify-center text-blue-600">
+            <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 shadow-xs">
               <Users className="w-5 h-5" />
             </div>
           </div>
-          <div className="flex items-center gap-1.5 relative z-10 text-xs text-slate-500">
+          <div className="flex items-center gap-1.5 relative z-10 text-[11px] text-slate-500">
             <span className="text-emerald-600 font-mono font-bold flex items-center">
               <TrendingUp className="w-3.5 h-3.5 mr-0.5" /> Direct Sync
             </span>
-            <span>with Supabase Auth</span>
+            <span>Supabase Auth</span>
           </div>
         </div>
 
-        {/* Stat 2 */}
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden group">
-          <div className="absolute -right-4 -top-4 w-24 h-24 bg-emerald-500/5 rounded-full group-hover:scale-110 transition-transform"></div>
-          <div className="flex justify-between items-start mb-4 relative z-10">
+        {/* Stat 2: Live Users */}
+        <div 
+          onClick={() => setActiveTab('live')}
+          className={`bg-white p-5 rounded-xl border transition-all cursor-pointer relative overflow-hidden group shadow-xs ${
+            activeTab === 'live'
+              ? 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/10'
+              : 'border-slate-200 hover:border-emerald-300 hover:shadow-sm'
+          }`}
+        >
+          <div className="absolute -right-4 -top-4 w-20 h-20 bg-emerald-500/5 rounded-full group-hover:scale-110 transition-transform"></div>
+          <div className="flex justify-between items-start mb-3 relative z-10">
             <div>
               <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Live Users</p>
               <h3 className="text-2xl font-bold text-slate-900 mt-1 flex items-center gap-2">
@@ -443,46 +647,186 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
               </h3>
             </div>
-            <div className="w-10 h-10 rounded bg-emerald-50 flex items-center justify-center text-emerald-600">
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 shadow-xs">
               <UserCheck className="w-5 h-5" />
             </div>
           </div>
-          <div className="flex items-center gap-1.5 relative z-10 text-xs text-slate-500">
+          <div className="flex items-center gap-1.5 relative z-10 text-[11px] text-slate-500">
             <span className="text-emerald-600 font-mono font-bold flex items-center">
               Online State
             </span>
-            <span>last seen &lt; 2m ago</span>
+            <span>last seen &lt; 2m</span>
           </div>
         </div>
 
-        {/* Stat 3 */}
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden group">
-          <div className="absolute -right-4 -top-4 w-24 h-24 bg-rose-500/5 rounded-full group-hover:scale-110 transition-transform"></div>
-          <div className="flex justify-between items-start mb-4 relative z-10">
+        {/* Stat 3: New Users Today */}
+        <div 
+          onClick={() => setActiveTab('today')}
+          className={`bg-white p-5 rounded-xl border transition-all cursor-pointer relative overflow-hidden group shadow-xs ${
+            activeTab === 'today'
+              ? 'border-rose-500 ring-2 ring-rose-500/20 bg-rose-50/10'
+              : 'border-slate-200 hover:border-rose-300 hover:shadow-sm'
+          }`}
+        >
+          <div className="absolute -right-4 -top-4 w-20 h-20 bg-rose-500/5 rounded-full group-hover:scale-110 transition-transform"></div>
+          <div className="flex justify-between items-start mb-3 relative z-10">
             <div>
               <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider">New Users Today</p>
               <h3 className="text-2xl font-bold text-slate-900 mt-1">{newUsersTodayCount}</h3>
             </div>
-            <div className="w-10 h-10 rounded bg-rose-50 flex items-center justify-center text-rose-600">
+            <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600 shadow-xs">
               <UserPlus className="w-5 h-5" />
             </div>
           </div>
-          <div className="flex items-center gap-1.5 relative z-10 text-xs text-slate-500">
+          <div className="flex items-center gap-1.5 relative z-10 text-[11px] text-slate-500">
             <span className="text-emerald-600 font-mono font-bold flex items-center">
               Real-time
             </span>
             <span>registered today</span>
           </div>
         </div>
+
+        {/* Stat 4: Admin Users */}
+        {isSuperAdmin && (
+          <div 
+            onClick={() => setActiveTab('admins')}
+            className={`bg-white p-5 rounded-xl border transition-all cursor-pointer relative overflow-hidden group shadow-xs ${
+              activeTab === 'admins'
+                ? 'border-purple-500 ring-2 ring-purple-500/20 bg-purple-50/10'
+                : 'border-slate-200 hover:border-purple-300 hover:shadow-sm'
+            }`}
+          >
+            <div className="absolute -right-4 -top-4 w-20 h-20 bg-purple-500/5 rounded-full group-hover:scale-110 transition-transform"></div>
+            <div className="flex justify-between items-start mb-3 relative z-10">
+              <div>
+                <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Admin Users</p>
+                <h3 className="text-2xl font-bold text-purple-900 mt-1 flex items-center gap-2">
+                  <span>{adminUsersCount}</span>
+                  <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded-full">Portal</span>
+                </h3>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center text-purple-700 shadow-xs">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 relative z-10 text-[11px] text-slate-500">
+              <span className="text-purple-700 font-mono font-bold flex items-center">
+                Admin Access
+              </span>
+              <span>click to list admins</span>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Super Admin: Dedicated Admin Users Access Section */}
+      {isSuperAdmin && (
+        <div className="bg-gradient-to-r from-purple-900/5 via-indigo-900/5 to-purple-900/5 border border-purple-200 rounded-2xl p-5 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-purple-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-purple-600 text-white flex items-center justify-center shadow-sm">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold text-slate-900 font-sans">Admin Panel Access & Accounts</h3>
+                  <span className="px-2.5 py-0.5 bg-purple-600 text-white text-xs font-bold rounded-full">
+                    {adminUsers.length} Admin{adminUsers.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Users who have active login credentials to access this Admin Portal.
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => openAssignRoleModal()}
+              className="h-9 px-3.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer shrink-0 self-start sm:self-auto"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Grant New Admin Role</span>
+            </button>
+          </div>
+
+          {/* Admin Users Grid */}
+          {isAdminUsersLoading && adminUsers.length === 0 ? (
+            <div className="p-4 text-center text-xs text-slate-500 animate-pulse">Loading admin accounts...</div>
+          ) : adminUsers.length === 0 ? (
+            <div className="p-4 text-center text-xs text-slate-500">No admin accounts found.</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {adminUsers.map((admin) => {
+                const isSuper = admin.role === 'super_admin';
+                return (
+                  <div
+                    key={admin.id}
+                    className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs hover:border-purple-300 transition-all flex flex-col justify-between gap-3 group"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-full font-bold text-sm flex items-center justify-center text-white shrink-0 ${
+                          isSuper ? 'bg-gradient-to-br from-purple-600 to-indigo-700 shadow-sm' : 'bg-gradient-to-br from-blue-600 to-indigo-600 shadow-sm'
+                        }`}>
+                          {admin.full_name ? admin.full_name.charAt(0).toUpperCase() : 'A'}
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900 group-hover:text-purple-900 transition-colors">
+                            {admin.full_name || 'Admin User'}
+                          </h4>
+                          <p className="text-xs font-mono text-purple-700 font-semibold">
+                            @{admin.username}
+                          </p>
+                        </div>
+                      </div>
+
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                        isSuper ? 'bg-purple-100 text-purple-800 border border-purple-200' : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                      }`}>
+                        {isSuper ? 'Super Admin' : 'Admin'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                      <div>
+                        <span>Last active: </span>
+                        <span className="font-medium text-slate-700">{formatLastSeen(admin.last_login_at)}</span>
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => openEditAdminModal(admin)}
+                          title="Edit Admin Username, Password or Role"
+                          className="p-1.5 bg-slate-100 hover:bg-purple-100 hover:text-purple-700 text-slate-600 rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold px-2"
+                        >
+                          <Edit className="w-3.5 h-3.5" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteAdminUser(admin.id, admin.username)}
+                          title="Revoke Admin Access"
+                          className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold px-2"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Toolbar & Filters */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
         {/* Navigation Tabs */}
-        <div className="flex border-b border-slate-200 px-6 bg-slate-50/50">
+        <div className="flex border-b border-slate-200 px-6 bg-slate-50/50 overflow-x-auto">
           <button
             onClick={() => setActiveTab('all')}
-            className={`py-3.5 px-4 font-sans text-xs font-semibold uppercase tracking-wider border-b-2 transition-all duration-150 cursor-pointer ${
+            className={`py-3.5 px-4 font-sans text-xs font-semibold uppercase tracking-wider border-b-2 transition-all duration-150 cursor-pointer whitespace-nowrap ${
               activeTab === 'all'
                 ? 'border-blue-600 text-blue-600 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -492,7 +836,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
           </button>
           <button
             onClick={() => setActiveTab('live')}
-            className={`py-3.5 px-4 font-sans text-xs font-semibold uppercase tracking-wider border-b-2 transition-all duration-150 flex items-center gap-1.5 cursor-pointer ${
+            className={`py-3.5 px-4 font-sans text-xs font-semibold uppercase tracking-wider border-b-2 transition-all duration-150 flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
               activeTab === 'live'
                 ? 'border-blue-600 text-blue-600 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -503,7 +847,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
           </button>
           <button
             onClick={() => setActiveTab('today')}
-            className={`py-3.5 px-4 font-sans text-xs font-semibold uppercase tracking-wider border-b-2 transition-all duration-150 cursor-pointer ${
+            className={`py-3.5 px-4 font-sans text-xs font-semibold uppercase tracking-wider border-b-2 transition-all duration-150 cursor-pointer whitespace-nowrap ${
               activeTab === 'today'
                 ? 'border-blue-600 text-blue-600 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -511,6 +855,19 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
           >
             New Users Today ({newUsersTodayCount})
           </button>
+          {isSuperAdmin && (
+            <button
+              onClick={() => setActiveTab('admins')}
+              className={`py-3.5 px-4 font-sans text-xs font-semibold uppercase tracking-wider border-b-2 transition-all duration-150 flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                activeTab === 'admins'
+                  ? 'border-purple-600 text-purple-600 font-bold'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
+              Admin Access ({adminUsersCount})
+            </button>
+          )}
         </div>
 
         <div className="p-6 border-b border-slate-200 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4 bg-white">
@@ -627,15 +984,27 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
                   </div>
 
                   <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-100">
-                    {isSuperAdmin && (
-                      <button
-                        onClick={() => openAssignRoleModal(user)}
-                        className="px-2.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-                      >
-                        <ShieldCheck className="w-3.5 h-3.5" />
-                        <span>Give Role</span>
-                      </button>
-                    )}
+                    {isSuperAdmin && (() => {
+                      const isUserAdmin = (user.role || '').toLowerCase().includes('admin') || adminUsers.some(a => 
+                        a.id === user.id ||
+                        (a.username && user.name && a.username.toLowerCase() === user.name.toLowerCase()) ||
+                        (a.full_name && user.name && a.full_name.toLowerCase() === user.name.toLowerCase()) ||
+                        (a.username && user.email && user.email.toLowerCase().includes(a.username.toLowerCase()))
+                      );
+                      return (
+                        <button
+                          onClick={() => openAssignRoleModal(user)}
+                          className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors ${
+                            isUserAdmin
+                              ? "bg-purple-100 hover:bg-purple-200 text-purple-800 border border-purple-300"
+                              : "bg-purple-50 hover:bg-purple-100 text-purple-700"
+                          }`}
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5 text-purple-700" />
+                          <span>{isUserAdmin ? 'Update Role' : 'Give Role'}</span>
+                        </button>
+                      );
+                    })()}
                     <button
                       onClick={() => openEditModal(user)}
                       className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
@@ -751,16 +1120,28 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
                       {/* Actions */}
                       <td className="px-6 py-2 text-right">
                         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-                          {isSuperAdmin && (
-                            <button
-                              onClick={() => openAssignRoleModal(user)}
-                              title="Give Role / Generate Credentials"
-                              className="px-2.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors mr-1"
-                            >
-                              <ShieldCheck className="w-3.5 h-3.5" />
-                              <span>Give Role</span>
-                            </button>
-                          )}
+                          {isSuperAdmin && (() => {
+                            const isUserAdmin = (user.role || '').toLowerCase().includes('admin') || adminUsers.some(a => 
+                              a.id === user.id ||
+                              (a.username && user.name && a.username.toLowerCase() === user.name.toLowerCase()) ||
+                              (a.full_name && user.name && a.full_name.toLowerCase() === user.name.toLowerCase()) ||
+                              (a.username && user.email && user.email.toLowerCase().includes(a.username.toLowerCase()))
+                            );
+                            return (
+                              <button
+                                onClick={() => openAssignRoleModal(user)}
+                                title={isUserAdmin ? "Update Role & Credentials" : "Give Role / Generate Credentials"}
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors mr-1 ${
+                                  isUserAdmin
+                                    ? "bg-purple-100 hover:bg-purple-200 text-purple-800 border border-purple-300 shadow-xs"
+                                    : "bg-purple-50 hover:bg-purple-100 text-purple-700"
+                                }`}
+                              >
+                                <ShieldCheck className="w-3.5 h-3.5 text-purple-700" />
+                                <span>{isUserAdmin ? 'Update Role' : 'Give Role'}</span>
+                              </button>
+                            );
+                          })()}
                           <button
                             onClick={() => openEditModal(user)}
                             title="Edit user details"
@@ -861,6 +1242,17 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500"
                 />
+                {!isEditMode && (
+                  <label className="flex items-center gap-2 cursor-pointer mt-2 text-xs text-slate-600 select-none bg-slate-50 p-2 rounded-lg border border-slate-200/60">
+                    <input
+                      type="checkbox"
+                      checked={autoConfirm}
+                      onChange={(e) => setAutoConfirm(e.target.checked)}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                    <span className="font-medium text-slate-700">Auto Confirm Registration (No email verification required)</span>
+                  </label>
+                )}
               </div>
 
               {/* Phone */}
@@ -942,10 +1334,14 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
               <div>
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="w-5 h-5 text-purple-300" />
-                  <h3 className="text-lg font-bold">Assign Admin Role & Credentials</h3>
+                  <h3 className="text-lg font-bold">
+                    {editingAdminId ? 'Edit Admin Credentials & Role' : 'Assign Admin Role & Credentials'}
+                  </h3>
                 </div>
                 <p className="text-purple-200 text-xs mt-1">
-                  Grant Admin/Super Admin access & share credentials via WhatsApp.
+                  {editingAdminId
+                    ? 'Update username, password, or role for this admin account.'
+                    : 'Grant Admin/Super Admin access & share credentials via WhatsApp.'}
                 </p>
               </div>
               <button
@@ -1146,21 +1542,21 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
                   <div>
                     <div className="flex justify-between items-center mb-1">
                       <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
-                        Login Password *
+                        Login Password {editingAdminId ? '(Optional)' : '*'}
                       </label>
                       <button
                         type="button"
                         onClick={() => setAssignPassword(generateRandomPassword())}
                         className="text-[11px] text-purple-600 hover:text-purple-800 font-semibold flex items-center gap-1 cursor-pointer"
                       >
-                        <RefreshCw className="w-3 h-3" /> Generate Password
+                        <RefreshCw className="w-3 h-3" /> Generate New Password
                       </button>
                     </div>
                     <div className="relative">
                       <input
                         type={showPassword ? 'text' : 'password'}
-                        required
-                        placeholder="Enter password"
+                        required={!editingAdminId}
+                        placeholder={editingAdminId ? 'Enter new password (or leave blank to keep current)' : 'Enter password'}
                         value={assignPassword}
                         onChange={(e) => setAssignPassword(e.target.value)}
                         className="w-full h-10 pl-3 pr-10 border border-slate-200 rounded-lg text-sm text-slate-800 font-mono focus:outline-none focus:border-purple-500"
@@ -1206,12 +1602,12 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
                       {assignLoading ? (
                         <>
                           <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>Creating...</span>
+                          <span>Saving...</span>
                         </>
                       ) : (
                         <>
                           <Key className="w-4 h-4" />
-                          <span>Assign & Generate</span>
+                          <span>{editingAdminId ? 'Update & Save' : 'Assign & Generate'}</span>
                         </>
                       )}
                     </button>

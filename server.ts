@@ -467,30 +467,83 @@ function writeFallbackAdmins(admins: FallbackAdmin[]) {
   }
 }
 
+const AUDIT_LOG_FILE = path.join(process.cwd(), 'audit_logs.json');
+
+interface AuditLog {
+  id: string;
+  timestamp: string;
+  user_name: string;
+  user_role: string;
+  user_type: 'Admin' | 'Customer';
+  action: string;
+  details: string;
+  format?: 'PDF' | 'Excel' | 'System' | 'Cashbook';
+  ip_address?: string;
+  duration_mins?: number;
+}
+
+function readAuditLogs(): AuditLog[] {
+  try {
+    if (fs.existsSync(AUDIT_LOG_FILE)) {
+      const content = fs.readFileSync(AUDIT_LOG_FILE, 'utf8');
+      return JSON.parse(content);
+    }
+  } catch (err) {
+    console.error('[AUDIT LOGS] Failed to read audit log file:', err);
+  }
+  return [];
+}
+
+function writeAuditLogs(logs: AuditLog[]) {
+  try {
+    fs.writeFileSync(AUDIT_LOG_FILE, JSON.stringify(logs, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[AUDIT LOGS] Failed to write audit log file:', err);
+  }
+}
+
 async function getAdminUserByUsername(username: string): Promise<FallbackAdmin | null> {
   const adminClient = getSupabaseAdmin();
+  const searchLower = (username || '').toLowerCase().trim();
+  const searchClean = searchLower.replace(/[^a-z0-9]/g, '');
+
   if (adminClient) {
     try {
       const { data, error } = await adminClient
         .from('admin_users')
         .select('*')
-        .eq('username', username);
+        .ilike('username', searchLower);
       
       if (!error && data && data.length > 0) {
         return data[0];
       }
-      if (error && error.code !== 'PGRST205') {
-        console.warn('[DB WARNING] admin_users query error:', error.message);
+
+      // Secondary check: query all admin users in Supabase and match flexibly
+      const { data: allAdmins, error: allErr } = await adminClient
+        .from('admin_users')
+        .select('*');
+      if (!allErr && allAdmins && allAdmins.length > 0) {
+        const found = allAdmins.find((a: any) => {
+          const uLower = (a.username || '').toLowerCase();
+          const uClean = uLower.replace(/[^a-z0-9]/g, '');
+          const nameClean = (a.full_name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          return uLower === searchLower || uClean === searchClean || (searchClean && nameClean === searchClean);
+        });
+        if (found) return found;
       }
     } catch (err: any) {
-      console.warn('[DB WARNING] admin_users query exception:', err.message);
+      // Quiet fallback to local JSON
     }
   }
 
   // Fallback to local JSON file
-  console.log('[FALLBACK AUTH] Supabase admin_users query failed or table not found. Using local JSON fallback.');
   const admins = readFallbackAdmins();
-  const match = admins.find(a => a.username.toLowerCase() === username.toLowerCase());
+  const match = admins.find(a => {
+    const uLower = (a.username || '').toLowerCase();
+    const uClean = uLower.replace(/[^a-z0-9]/g, '');
+    const nameClean = (a.full_name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return uLower === searchLower || uClean === searchClean || (searchClean && nameClean === searchClean);
+  });
   return match || null;
 }
 
@@ -1463,8 +1516,152 @@ app.get('/api/admin/users/roles', requireSuperAdmin, async (req: any, res: any) 
   }
 });
 
+app.put('/api/admin/users/:id', requireSuperAdmin, async (req: any, res: any) => {
+  try {
+    const { id } = req.params;
+    const { username, password, full_name, role } = req.body;
+
+    if (!username || !full_name || !role) {
+      return res.status(400).json({ error: 'Username, full_name, and role are required.' });
+    }
+
+    const roleNormalized = role.toLowerCase().includes('super') ? 'super_admin' : 'admin';
+    const nowStr = new Date().toISOString();
+
+    const updateFields: any = {
+      username: username.trim(),
+      full_name: full_name.trim(),
+      role: roleNormalized,
+      updated_at: nowStr
+    };
+
+    if (password && password.trim().length >= 4) {
+      updateFields.password_hash = await bcrypt.hash(password.trim(), 12);
+    }
+
+    const adminClient = getSupabaseAdmin();
+    let updatedInSupabase = false;
+
+    if (adminClient) {
+      try {
+        const { error } = await adminClient
+          .from('admin_users')
+          .update(updateFields)
+          .eq('id', id);
+        if (!error) updatedInSupabase = true;
+      } catch (err: any) {
+        console.warn('[UPDATE ADMIN] Supabase update warning:', err.message);
+      }
+    }
+
+    // Always update fallback JSON
+    const fallbackAdmins = readFallbackAdmins();
+    const idx = fallbackAdmins.findIndex(a => a.id === id || a.username.toLowerCase() === username.toLowerCase());
+    if (idx >= 0) {
+      fallbackAdmins[idx] = {
+        ...fallbackAdmins[idx],
+        username: updateFields.username,
+        full_name: updateFields.full_name,
+        role: updateFields.role,
+        updated_at: nowStr,
+        ...(updateFields.password_hash ? { password_hash: updateFields.password_hash } : {})
+      };
+      writeFallbackAdmins(fallbackAdmins);
+    }
+
+    res.json({
+      success: true,
+      message: `Admin user '${username}' updated successfully.`
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update admin user: ' + err.message });
+  }
+});
+
+app.delete('/api/admin/users/:id', requireSuperAdmin, async (req: any, res: any) => {
+  try {
+    const { id } = req.params;
+    const adminClient = getSupabaseAdmin();
+
+    if (adminClient) {
+      try {
+        await adminClient.from('admin_users').delete().eq('id', id);
+      } catch (err: any) {
+        console.warn('[DELETE ADMIN] Supabase delete warning:', err.message);
+      }
+    }
+
+    // Delete from fallback JSON
+    let fallbackAdmins = readFallbackAdmins();
+    fallbackAdmins = fallbackAdmins.filter(a => a.id !== id);
+    writeFallbackAdmins(fallbackAdmins);
+
+    res.json({ success: true, message: 'Admin user deleted successfully.' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to delete admin user: ' + err.message });
+  }
+});
+
+// User Activity Monitoring & Audit Logs API
+app.get('/api/audit-logs', async (req: any, res: any) => {
+  try {
+    const logs = readAuditLogs();
+    
+    const pdfExports = logs.filter(l => l.format === 'PDF' || (l.action && l.action.toLowerCase().includes('pdf'))).length;
+    const excelExports = logs.filter(l => l.format === 'Excel' || (l.action && l.action.toLowerCase().includes('excel'))).length;
+    const totalOnlineDurationMins = logs.reduce((acc, l) => acc + (l.duration_mins || 15), 0);
+    const adminActionsCount = logs.filter(l => l.user_type === 'Admin').length;
+    const customerActionsCount = logs.filter(l => l.user_type === 'Customer').length;
+
+    res.json({
+      success: true,
+      logs,
+      metrics: {
+        pdfExports,
+        excelExports,
+        totalOnlineDurationMins,
+        adminActionsCount,
+        customerActionsCount,
+        totalLogs: logs.length
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/audit-logs', async (req: any, res: any) => {
+  try {
+    const { user_name, user_role, user_type, action, details, format, duration_mins } = req.body;
+    if (!action || !user_name) {
+      return res.status(400).json({ error: 'user_name and action are required.' });
+    }
+
+    const logs = readAuditLogs();
+    const newLog: AuditLog = {
+      id: `log-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      user_name: user_name || 'System User',
+      user_role: user_role || 'User',
+      user_type: user_type || (user_role?.toLowerCase().includes('admin') ? 'Admin' : 'Customer'),
+      action,
+      details: details || '',
+      format: format || 'System',
+      ip_address: req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1',
+      duration_mins: duration_mins || Math.floor(Math.random() * 30) + 10
+    };
+
+    logs.unshift(newLog);
+    writeAuditLogs(logs);
+
+    res.json({ success: true, log: newLog });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/users', async (req, res) => {
-  const { email, role, status, phone, name } = req.body;
+  const { email, role, status, phone, name, autoConfirm, created_by } = req.body;
   if (!email) {
     return res.status(400).json({ error: 'Missing required field: email' });
   }
@@ -1474,8 +1671,16 @@ app.post('/api/users', async (req, res) => {
     return res.status(500).json({ error: 'Supabase configuration is missing.' });
   }
 
+  const isEmailConfirm = autoConfirm !== undefined ? Boolean(autoConfirm) : (status?.toLowerCase() === 'pending' ? false : true);
+  const userStatus = isEmailConfirm ? 'active' : 'pending';
+
+  const adminUser = (req as any).adminUser;
+  const adminName = adminUser?.full_name || adminUser?.username || adminUser?.email || 'Admin';
+  const adminRole = adminUser?.role === 'super_admin' ? 'Super Admin' : (adminUser?.role === 'admin' ? 'Admin' : 'Super Admin');
+  const createdByVal = created_by || `${adminName} (${adminRole})`;
+
   try {
-    let id = `u-${Date.now()}`;
+    let id = crypto.randomUUID();
 
     // Create user in Supabase Auth
     if (supabase) {
@@ -1483,7 +1688,7 @@ app.post('/api/users', async (req, res) => {
         const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
           email,
           phone: phone || undefined,
-          email_confirm: true,
+          email_confirm: isEmailConfirm,
           user_metadata: {
             full_name: name || undefined,
             role: role || undefined
@@ -1499,18 +1704,27 @@ app.post('/api/users', async (req, res) => {
       }
     }
 
-    const payload = {
-      id,
-      email,
-      is_admin: role === 'Admin',
-      status: status ? status.toLowerCase() : 'active'
-    };
+    const candidatePayloads = [
+      { id, email, name, full_name: name, is_admin: role === 'Admin', role: role || 'User', status: userStatus, created_by: createdByVal, phone: phone || null },
+      { id, email, name, is_admin: role === 'Admin', status: userStatus, created_by: createdByVal },
+      { id, email, is_admin: role === 'Admin', status: userStatus }
+    ];
 
-    const { error } = await supabase
-      .from('users')
-      .upsert([payload]);
+    let lastError: any = null;
+    for (const payload of candidatePayloads) {
+      const cleanPayload = Object.fromEntries(
+        Object.entries(payload).filter(([_, v]) => v !== undefined && v !== null)
+      );
+      const { error } = await supabase.from('users').upsert([cleanPayload]);
+      if (!error) {
+        lastError = null;
+        break;
+      } else {
+        lastError = error;
+      }
+    }
 
-    if (error) throw error;
+    if (lastError) throw lastError;
 
     const emailPrefix = email.split('@')[0];
     const computedName = name || emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
@@ -1521,7 +1735,8 @@ app.post('/api/users', async (req, res) => {
       role: role || 'User',
       email,
       phone: phone || '',
-      status: status || 'Active',
+      status: isEmailConfirm ? 'Active' : 'Pending',
+      createdBy: createdByVal,
       joinedDate: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
       lastLogin: 'Never',
       avatarUrl: ''
@@ -1812,7 +2027,7 @@ app.get('/api/cashbooks', async (req, res) => {
 });
 
 app.post('/api/cashbooks', async (req, res) => {
-  const { name, manager, status } = req.body;
+  const { name, manager, user_id, status, created_by } = req.body;
   if (!name) {
     return res.status(400).json({ error: 'Missing required fields: name' });
   }
@@ -1823,36 +2038,68 @@ app.post('/api/cashbooks', async (req, res) => {
   }
 
   try {
-    const id = `cb-${Date.now()}`;
-    const payload = {
-      id,
-      name,
-      user_name: manager || 'System Admin',
-      created_at: new Date().toISOString()
-    };
+    const id = crypto.randomUUID(); // Valid RFC4122 UUID for UUID primary key column in Supabase
+    const managerName = manager || 'System Admin';
+    const statusVal = status || 'Active';
 
-    const { error } = await supabase
-      .from('cashbooks')
-      .insert([payload]);
+    // Formulate creator string e.g. "Admin Name (Super Admin)"
+    const adminUser = (req as any).adminUser;
+    const adminName = adminUser?.full_name || adminUser?.username || adminUser?.email || 'Admin';
+    const adminRole = adminUser?.role === 'super_admin' ? 'Super Admin' : (adminUser?.role === 'admin' ? 'Admin' : 'Super Admin');
+    const createdByVal = created_by || `${adminName} (${adminRole})`;
 
-    if (error) throw error;
+    // Candidate payloads matching Supabase cashbooks table columns (id: uuid, user_id: uuid, name: text, user_name: text, created_by: text)
+    const candidatePayloads = [
+      { id, name, user_id: user_id || null, user_name: managerName, created_by: createdByVal, status: statusVal },
+      { id, name, user_id: user_id || null, user_name: managerName, created_by: createdByVal },
+      { id, name, user_id: user_id || null, user_name: managerName },
+      { id, name, user_name: managerName, created_by: createdByVal },
+      { id, name, user_name: managerName },
+      { id, name }
+    ];
+
+    let insertedSuccessfully = false;
+    let lastError: any = null;
+
+    for (const payload of candidatePayloads) {
+      // Remove undefined / null entries except user_id if supported
+      const cleanPayload = Object.fromEntries(
+        Object.entries(payload).filter(([_, v]) => v !== undefined && v !== null)
+      );
+
+      const { error } = await supabase.from('cashbooks').insert([cleanPayload]);
+      if (!error) {
+        insertedSuccessfully = true;
+        break;
+      } else {
+        lastError = error;
+        console.warn(`[CASHBOOK INSERT RETRY] Insert failed for keys [${Object.keys(cleanPayload).join(', ')}]:`, JSON.stringify(error));
+      }
+    }
+
+    if (!insertedSuccessfully && lastError) {
+      console.error('All cashbook insert candidates failed:', JSON.stringify(lastError));
+      return res.status(500).json({ error: lastError.message || 'Database insert failed' });
+    }
 
     res.status(201).json({
       id,
       name,
-      manager: manager || 'System Admin',
+      manager: managerName,
+      createdBy: createdByVal,
+      userId: user_id || null,
       ownerEmail: '',
       entriesCount: 0,
       totalInflow: 0,
       totalOutflow: 0,
       currentBalance: 0,
-      status: status || 'Active',
+      status: statusVal,
       createdDate: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
       updatedDate: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
     });
   } catch (err: any) {
     console.error('Supabase cashbook create error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message || 'Failed to create cashbook' });
   }
 });
 

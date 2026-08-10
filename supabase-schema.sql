@@ -10,18 +10,22 @@ CREATE TABLE IF NOT EXISTS users (
   phone TEXT,
   status TEXT NOT NULL DEFAULT 'Pending', -- 'Active' | 'Pending' | 'Inactive'
   joined_date TEXT,
-  avatar_url TEXT
+  avatar_url TEXT,
+  created_by TEXT
 );
 
 -- 2. Create Cashbooks Table
 CREATE TABLE IF NOT EXISTS cashbooks (
-  id TEXT PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES public.users(id),
   name TEXT NOT NULL,
-  manager TEXT NOT NULL,
+  user_name TEXT,
+  created_by TEXT,
   entries_count INTEGER DEFAULT 0,
   total_inflow NUMERIC DEFAULT 0,
   total_outflow NUMERIC DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'Active' -- 'Active' | 'Under Budget' | 'Nearing Limit'
+  status TEXT NOT NULL DEFAULT 'Active',
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 3. Create Entries Table

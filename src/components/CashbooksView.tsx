@@ -10,11 +10,22 @@ import {
   AlertCircle,
   Grid,
   List,
-  Trash2
+  Trash2,
+  User as UserIcon,
+  Mail,
+  Check,
+  ChevronDown
 } from 'lucide-react';
 import { Cashbook } from '../types';
 
 const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(input, { ...init, credentials: 'include' });
+
+interface AppUser {
+  id: string;
+  name: string;
+  email: string;
+  role?: string;
+}
 
 interface CashbooksViewProps {
   onAddCashbook?: () => void;
@@ -26,6 +37,12 @@ export default function CashbooksView({ onAddCashbook, isSuperAdmin = true }: Ca
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   
+  // Users state for dropdown
+  const [availableUsers, setAvailableUsers] = useState<AppUser[]>([]);
+  const [userSearchText, setUserSearchText] = useState('');
+  const [selectedUser, setSelectedUser] = useState<AppUser | null>(null);
+  const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false);
+
   // View mode state
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
     return (sessionStorage.getItem('cashbooks_view_mode') as 'grid' | 'list') || 'grid';
@@ -34,6 +51,32 @@ export default function CashbooksView({ onAddCashbook, isSuperAdmin = true }: Ca
   // Delete Modal State
   const [cashbookToDelete, setCashbookToDelete] = useState<Cashbook | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [cashbookName, setCashbookName] = useState('New Cashbook');
+  const [submitting, setSubmitting] = useState(false);
+
+  const fetchUsers = async () => {
+    try {
+      const res = await fetch('/api/users');
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableUsers(data || []);
+      }
+    } catch (err) {
+      console.error('Error fetching users for cashbook manager selection:', err);
+    }
+  };
+
+  const openNewCashbookModal = () => {
+    setCashbookName('New Cashbook');
+    setSelectedUser(null);
+    setUserSearchText('');
+    setIsUserDropdownOpen(false);
+    fetchUsers();
+    setIsModalOpen(true);
+  };
 
   const handleDeleteCashbook = async (cb: Cashbook) => {
     try {
@@ -58,14 +101,6 @@ export default function CashbooksView({ onAddCashbook, isSuperAdmin = true }: Ca
     sessionStorage.setItem('cashbooks_view_mode', viewMode);
   }, [viewMode]);
 
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    manager: '',
-    status: 'Active' as 'Active' | 'Under Budget' | 'Nearing Limit'
-  });
-
   const fetchCashbooks = async () => {
     try {
       setLoading(true);
@@ -87,22 +122,52 @@ export default function CashbooksView({ onAddCashbook, isSuperAdmin = true }: Ca
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.manager) return;
+    if (!cashbookName || !selectedUser) return;
 
     try {
+      setSubmitting(true);
+      const payload = {
+        name: cashbookName,
+        manager: selectedUser.name || selectedUser.email,
+        user_id: selectedUser.id,
+        status: 'Active'
+      };
+
       const res = await fetch('/api/cashbooks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(payload)
       });
+
       if (res.ok) {
+        // Log audit event
+        try {
+          await fetch('/api/audit-logs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user_name: selectedUser.name || selectedUser.email,
+              user_role: selectedUser.role || 'User',
+              user_type: selectedUser.role?.toLowerCase().includes('admin') ? 'Admin' : 'Customer',
+              action: 'Cashbook Creation',
+              details: `Created new cashbook: ${cashbookName} assigned to ${selectedUser.name || selectedUser.email}`,
+              format: 'Cashbook'
+            })
+          });
+        } catch (e) {
+          console.warn('Failed to log audit event:', e);
+        }
+
         setIsModalOpen(false);
-        setFormData({ name: '', manager: '', status: 'Active' });
+        setCashbookName('New Cashbook');
+        setSelectedUser(null);
         fetchCashbooks();
         if (onAddCashbook) onAddCashbook();
       }
     } catch (err) {
       console.error('Error creating cashbook:', err);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -120,7 +185,7 @@ export default function CashbooksView({ onAddCashbook, isSuperAdmin = true }: Ca
           <p className="text-slate-500 text-sm mt-1">Audit active expense accounts, department budgets, and inflows.</p>
         </div>
         <button
-          onClick={() => setIsModalOpen(true)}
+          onClick={openNewCashbookModal}
           className="h-10 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
         >
           <Plus className="w-4 h-4" />
@@ -423,11 +488,18 @@ export default function CashbooksView({ onAddCashbook, isSuperAdmin = true }: Ca
 
       {/* New Cashbook Modal Overlay */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl border border-slate-200 shadow-xl max-w-md w-full overflow-hidden animate-fade-in mx-4">
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden animate-fade-in">
+            {/* Modal Header */}
             <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
-              <h3 className="font-sans text-base font-bold text-slate-900">Configure New Cashbook</h3>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center font-bold">
+                  <BookOpen className="w-4 h-4" />
+                </div>
+                <h3 className="font-sans text-base font-bold text-slate-900">Create New Cashbook</h3>
+              </div>
               <button
+                type="button"
                 onClick={() => setIsModalOpen(false)}
                 className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition-colors cursor-pointer"
               >
@@ -435,63 +507,122 @@ export default function CashbooksView({ onAddCashbook, isSuperAdmin = true }: Ca
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit} className="p-6 space-y-5">
+              {/* Field 1: Cashbook Name */}
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Cashbook / Account Name
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                  Cashbook Name <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Office Operations Q4"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500"
+                  placeholder="e.g. New Cashbook"
+                  value={cashbookName}
+                  onChange={(e) => setCashbookName(e.target.value)}
+                  className="w-full h-11 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 focus:bg-white transition-all shadow-xs"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Account Manager
+              {/* Field 2: User Dropdown (Searchable by Name and Email) */}
+              <div className="relative">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                  Select User <span className="text-rose-500">*</span>
                 </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Sarah Jenkins"
-                  value={formData.manager}
-                  onChange={(e) => setFormData({ ...formData, manager: e.target.value })}
-                  className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500"
-                />
+                
+                {/* Search / Selector trigger input */}
+                <div className="relative">
+                  <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
+                    <Search className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Search user by name or email..."
+                    value={selectedUser ? `${selectedUser.name} (${selectedUser.email})` : userSearchText}
+                    onFocus={() => setIsUserDropdownOpen(true)}
+                    onChange={(e) => {
+                      setSelectedUser(null);
+                      setUserSearchText(e.target.value);
+                      setIsUserDropdownOpen(true);
+                    }}
+                    className="w-full h-11 pl-10 pr-9 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 focus:bg-white transition-all shadow-xs cursor-pointer"
+                  />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                    <ChevronDown className="w-4 h-4" />
+                  </div>
+                </div>
+
+                {/* Dropdown Options List */}
+                {isUserDropdownOpen && (
+                  <div className="absolute left-0 right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl z-50 max-h-56 overflow-y-auto divide-y divide-slate-100">
+                    {availableUsers.filter(u => {
+                      const query = userSearchText.toLowerCase();
+                      const nameMatch = (u.name || '').toLowerCase().includes(query);
+                      const emailMatch = (u.email || '').toLowerCase().includes(query);
+                      return nameMatch || emailMatch;
+                    }).length === 0 ? (
+                      <div className="px-4 py-3 text-xs text-slate-500 text-center font-medium">
+                        No users found matching "{userSearchText}"
+                      </div>
+                    ) : (
+                      availableUsers
+                        .filter(u => {
+                          const query = userSearchText.toLowerCase();
+                          const nameMatch = (u.name || '').toLowerCase().includes(query);
+                          const emailMatch = (u.email || '').toLowerCase().includes(query);
+                          return nameMatch || emailMatch;
+                        })
+                        .map((u) => {
+                          const isSelected = selectedUser?.id === u.id;
+                          return (
+                            <div
+                              key={u.id}
+                              onClick={() => {
+                                setSelectedUser(u);
+                                setUserSearchText('');
+                                setIsUserDropdownOpen(false);
+                              }}
+                              className={`px-4 py-2.5 hover:bg-blue-50/80 cursor-pointer transition-colors flex items-center justify-between gap-2 ${
+                                isSelected ? 'bg-blue-50 text-blue-900 font-semibold' : 'text-slate-800'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 overflow-hidden">
+                                <div className="w-7 h-7 rounded-full bg-slate-100 border border-slate-200 text-slate-700 flex items-center justify-center font-bold text-xs shrink-0">
+                                  {(u.name || u.email || 'U').charAt(0).toUpperCase()}
+                                </div>
+                                <div className="truncate">
+                                  <div className="text-xs font-bold text-slate-900 truncate">{u.name || 'User'}</div>
+                                  <div className="text-[11px] text-slate-500 truncate flex items-center gap-1">
+                                    <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+                                    <span>{u.email}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              {isSelected && (
+                                <Check className="w-4 h-4 text-blue-600 shrink-0" />
+                              )}
+                            </div>
+                          );
+                        })
+                    )}
+                  </div>
+                )}
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Initial Status State
-                </label>
-                <select
-                  value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                  className="w-full h-10 px-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-800 focus:outline-none focus:border-blue-500 cursor-pointer"
-                >
-                  <option value="Active">Active</option>
-                  <option value="Under Budget">Under Budget</option>
-                  <option value="Nearing Limit">Nearing Limit</option>
-                </select>
-              </div>
-
-              <div className="flex gap-3 pt-4 border-t border-slate-100">
+              {/* Action Buttons: Create and Cancel */}
+              <div className="flex gap-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="flex-1 h-10 border border-slate-200 hover:bg-slate-50 rounded-lg text-sm font-medium text-slate-700 transition-colors cursor-pointer"
+                  className="flex-1 h-11 border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 h-10 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer shadow-sm"
+                  disabled={submitting || !cashbookName || !selectedUser}
+                  className="flex-1 h-11 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                  Configure Account
+                  {submitting ? 'Creating...' : 'Create'}
                 </button>
               </div>
             </form>
