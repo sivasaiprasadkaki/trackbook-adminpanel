@@ -12,7 +12,16 @@ import {
   Edit,
   Trash2,
   X,
-  CheckCircle2
+  CheckCircle2,
+  ShieldCheck,
+  Key,
+  Share2,
+  Copy,
+  MessageSquare,
+  Eye,
+  EyeOff,
+  RefreshCw,
+  ExternalLink
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -45,6 +54,145 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
   });
 
   const [notification, setNotification] = useState<string | null>(null);
+
+  // Super Admin Role Assignment Modal States
+  const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState<string>('');
+  const [assignFullName, setAssignFullName] = useState<string>('');
+  const [assignUsername, setAssignUsername] = useState<string>('');
+  const [assignPassword, setAssignPassword] = useState<string>('');
+  const [assignRole, setAssignRole] = useState<'admin' | 'super_admin'>('admin');
+  const [assignPhone, setAssignPhone] = useState<string>('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
+  const [createdCredentials, setCreatedCredentials] = useState<{
+    username: string;
+    password: string;
+    fullName: string;
+    role: string;
+    phone: string;
+  } | null>(null);
+
+  const generateRandomPassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+    let rand = '';
+    for (let i = 0; i < 6; i++) {
+      rand += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return `Trip@${rand}!`;
+  };
+
+  const generateUsernameFromName = (name: string) => {
+    if (!name) return 'admin_' + Math.floor(100 + Math.random() * 900);
+    const clean = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return `${clean.slice(0, 10)}_admin`;
+  };
+
+  const openAssignRoleModal = (userToAssign?: User) => {
+    setAssignError(null);
+    setCreatedCredentials(null);
+    setShowPassword(false);
+
+    if (userToAssign) {
+      setSelectedUserId(userToAssign.id);
+      setAssignFullName(userToAssign.name);
+      setAssignPhone(userToAssign.phone || '');
+      setAssignUsername(generateUsernameFromName(userToAssign.name));
+    } else {
+      setSelectedUserId('');
+      setAssignFullName('');
+      setAssignPhone('');
+      setAssignUsername('');
+    }
+    setAssignPassword(generateRandomPassword());
+    setAssignRole('admin');
+    setIsRoleModalOpen(true);
+  };
+
+  const handleSelectMemberForRole = (userId: string) => {
+    setSelectedUserId(userId);
+    const u = users.find(x => x.id === userId);
+    if (u) {
+      setAssignFullName(u.name);
+      setAssignPhone(u.phone || '');
+      setAssignUsername(generateUsernameFromName(u.name));
+    }
+  };
+
+  const handleAssignRoleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAssignError(null);
+
+    if (!assignUsername.trim()) {
+      setAssignError('Username is required.');
+      return;
+    }
+    if (!assignPassword.trim() || assignPassword.length < 6) {
+      setAssignError('Password must be at least 6 characters.');
+      return;
+    }
+    if (!assignFullName.trim()) {
+      setAssignError('Full name is required.');
+      return;
+    }
+
+    setAssignLoading(true);
+    try {
+      const res = await fetch('/api/admin/users/assign-role', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: selectedUserId || undefined,
+          username: assignUsername.trim(),
+          password: assignPassword.trim(),
+          full_name: assignFullName.trim(),
+          role: assignRole
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to assign role.');
+      }
+
+      setCreatedCredentials({
+        username: assignUsername.trim(),
+        password: assignPassword.trim(),
+        fullName: assignFullName.trim(),
+        role: assignRole,
+        phone: assignPhone.trim()
+      });
+
+      triggerNotification(`Role '${assignRole === 'super_admin' ? 'Super Admin' : 'Admin'}' assigned to ${assignFullName}!`);
+      fetchUsers();
+    } catch (err: any) {
+      setAssignError(err.message || 'An error occurred.');
+    } finally {
+      setAssignLoading(false);
+    }
+  };
+
+  const handleShareWhatsApp = () => {
+    if (!createdCredentials) return;
+    const roleTitle = createdCredentials.role === 'super_admin' ? 'Super Admin' : 'Admin';
+    const msg = `Hello *${createdCredentials.fullName}*,\n\nYou have been granted *${roleTitle}* access in *TripTraccker Admin Portal*.\n\n🔑 *Login Credentials:*\n• *Username:* \`${createdCredentials.username}\`\n• *Password:* \`${createdCredentials.password}\`\n• *Role:* ${roleTitle}\n\n🌐 *Portal URL:*\n${window.location.origin}\n\nPlease login with these credentials.`;
+
+    const cleanPhone = createdCredentials.phone ? createdCredentials.phone.replace(/[^0-9]/g, '') : '';
+    const waUrl = cleanPhone && cleanPhone.length >= 8
+      ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`
+      : `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+
+    window.open(waUrl, '_blank');
+  };
+
+  const handleCopyCredentials = () => {
+    if (!createdCredentials) return;
+    const roleTitle = createdCredentials.role === 'super_admin' ? 'Super Admin' : 'Admin';
+    const text = `TripTraccker Credentials:\nName: ${createdCredentials.fullName}\nRole: ${roleTitle}\nUsername: ${createdCredentials.username}\nPassword: ${createdCredentials.password}\nPortal URL: ${window.location.origin}`;
+    navigator.clipboard.writeText(text);
+    triggerNotification('Credentials copied to clipboard!');
+  };
 
   // Helper: check if user joined today
   const isJoinedToday = (joinedDateStr?: string) => {
@@ -231,7 +379,16 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
           <h2 className="text-2xl font-bold font-sans text-slate-900 tracking-tight">Users Management</h2>
           <p className="text-slate-500 text-sm mt-1">Manage platform users, view their activity, and update roles.</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2 sm:gap-3">
+          {isSuperAdmin && (
+            <button
+              onClick={() => openAssignRoleModal()}
+              className="h-10 px-4 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-semibold transition-all shadow-sm flex items-center gap-2 cursor-pointer active:scale-98"
+            >
+              <ShieldCheck className="w-4 h-4 text-purple-200" />
+              <span>Give Admin Role</span>
+            </button>
+          )}
           <button
             onClick={handleExport}
             className="h-10 px-4 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 cursor-pointer"
@@ -470,6 +627,15 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
                   </div>
 
                   <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-100">
+                    {isSuperAdmin && (
+                      <button
+                        onClick={() => openAssignRoleModal(user)}
+                        className="px-2.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>Give Role</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => openEditModal(user)}
                       className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
@@ -585,6 +751,16 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
                       {/* Actions */}
                       <td className="px-6 py-2 text-right">
                         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                          {isSuperAdmin && (
+                            <button
+                              onClick={() => openAssignRoleModal(user)}
+                              title="Give Role / Generate Credentials"
+                              className="px-2.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors mr-1"
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                              <span>Give Role</span>
+                            </button>
+                          )}
                           <button
                             onClick={() => openEditModal(user)}
                             title="Edit user details"
@@ -753,6 +929,296 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Super Admin: Role Assignment & Credentials Modal */}
+      {isRoleModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden border border-slate-200 animate-in fade-in zoom-in duration-150">
+            {/* Header */}
+            <div className="p-5 bg-gradient-to-r from-purple-900 to-indigo-900 text-white flex justify-between items-start">
+              <div>
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-purple-300" />
+                  <h3 className="text-lg font-bold">Assign Admin Role & Credentials</h3>
+                </div>
+                <p className="text-purple-200 text-xs mt-1">
+                  Grant Admin/Super Admin access & share credentials via WhatsApp.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsRoleModalOpen(false)}
+                className="text-purple-300 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5 max-h-[85vh] overflow-y-auto">
+              {createdCredentials ? (
+                /* SUCCESS & WHATSAPP SHARE CARD */
+                <div className="space-y-4">
+                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 flex items-start gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="font-bold text-sm">Role Successfully Granted!</h4>
+                      <p className="text-xs text-emerald-700 mt-0.5">
+                        {createdCredentials.fullName} is now assigned as <strong>{createdCredentials.role === 'super_admin' ? 'Super Admin' : 'Admin'}</strong>.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Credentials Display Card */}
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 font-mono text-xs">
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                      <span className="text-slate-500 font-sans font-semibold uppercase tracking-wider text-[10px]">Member:</span>
+                      <span className="font-sans font-bold text-slate-800 text-sm">{createdCredentials.fullName}</span>
+                    </div>
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                      <span className="text-slate-500 font-sans font-semibold uppercase tracking-wider text-[10px]">Assigned Role:</span>
+                      <span className="font-sans px-2 py-0.5 bg-purple-100 text-purple-800 rounded font-bold uppercase text-[10px]">
+                        {createdCredentials.role === 'super_admin' ? 'Super Admin' : 'Admin'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                      <span className="text-slate-500 font-sans font-semibold uppercase tracking-wider text-[10px]">Username:</span>
+                      <span className="font-bold text-slate-900 text-sm bg-white px-2 py-1 border border-slate-200 rounded">{createdCredentials.username}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500 font-sans font-semibold uppercase tracking-wider text-[10px]">Password:</span>
+                      <span className="font-bold text-slate-900 text-sm bg-white px-2 py-1 border border-slate-200 rounded">{createdCredentials.password}</span>
+                    </div>
+                  </div>
+
+                  {/* WhatsApp Action Buttons */}
+                  <div className="space-y-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={handleShareWhatsApp}
+                      className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm flex items-center justify-center gap-2 transition-all shadow-md active:scale-98 cursor-pointer"
+                    >
+                      <MessageSquare className="w-5 h-5 text-emerald-100" />
+                      <span>Share via WhatsApp</span>
+                    </button>
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCopyCredentials}
+                        className="flex-1 h-10 border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                      >
+                        <Copy className="w-4 h-4 text-slate-400" />
+                        <span>Copy Text</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsRoleModalOpen(false)}
+                        className="flex-1 h-10 bg-slate-900 hover:bg-slate-800 text-white font-medium rounded-xl text-xs cursor-pointer transition-colors"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* FORM STEP */
+                <form onSubmit={handleAssignRoleSubmit} className="space-y-4">
+                  {assignError && (
+                    <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-xs font-medium">
+                      {assignError}
+                    </div>
+                  )}
+
+                  {/* Select Existing Member */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
+                      Select Member / User
+                    </label>
+                    <select
+                      value={selectedUserId}
+                      onChange={(e) => handleSelectMemberForRole(e.target.value)}
+                      className="w-full h-10 px-3 bg-white border border-slate-200 rounded-lg text-sm text-slate-800 focus:outline-none focus:border-purple-500 cursor-pointer"
+                    >
+                      <option value="">-- Choose member from Users list or enter details below --</option>
+                      {users.map(u => (
+                        <option key={u.id} value={u.id}>
+                          {u.name} ({u.role}) {u.phone ? ` - ${u.phone}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Full Name */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
+                      Full Name *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Siva Sai Prasad"
+                      value={assignFullName}
+                      onChange={(e) => {
+                        setAssignFullName(e.target.value);
+                        if (!assignUsername) {
+                          setAssignUsername(generateUsernameFromName(e.target.value));
+                        }
+                      }}
+                      className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+
+                  {/* Role Selection */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
+                      Assign System Role *
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className={`p-3 border rounded-xl flex items-center gap-2 cursor-pointer transition-all ${
+                        assignRole === 'admin' 
+                          ? 'border-purple-600 bg-purple-50 text-purple-900 font-bold shadow-xs' 
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="roleType"
+                          value="admin"
+                          checked={assignRole === 'admin'}
+                          onChange={() => setAssignRole('admin')}
+                          className="text-purple-600 focus:ring-purple-500"
+                        />
+                        <div className="text-xs">
+                          <p className="font-bold">Admin</p>
+                          <p className="text-[10px] text-slate-500">Standard admin access</p>
+                        </div>
+                      </label>
+
+                      <label className={`p-3 border rounded-xl flex items-center gap-2 cursor-pointer transition-all ${
+                        assignRole === 'super_admin' 
+                          ? 'border-purple-600 bg-purple-50 text-purple-900 font-bold shadow-xs' 
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="roleType"
+                          value="super_admin"
+                          checked={assignRole === 'super_admin'}
+                          onChange={() => setAssignRole('super_admin')}
+                          className="text-purple-600 focus:ring-purple-500"
+                        />
+                        <div className="text-xs">
+                          <p className="font-bold">Super Admin</p>
+                          <p className="text-[10px] text-slate-500">Full system & delete controls</p>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Username */}
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
+                        Login Username *
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setAssignUsername(generateUsernameFromName(assignFullName))}
+                        className="text-[11px] text-purple-600 hover:text-purple-800 font-semibold flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-3 h-3" /> Auto Suggest
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. sivasai_admin"
+                      value={assignUsername}
+                      onChange={(e) => setAssignUsername(e.target.value)}
+                      className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 font-mono focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+
+                  {/* Password */}
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
+                        Login Password *
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setAssignPassword(generateRandomPassword())}
+                        className="text-[11px] text-purple-600 hover:text-purple-800 font-semibold flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-3 h-3" /> Generate Password
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        placeholder="Enter password"
+                        value={assignPassword}
+                        onChange={(e) => setAssignPassword(e.target.value)}
+                        className="w-full h-10 pl-3 pr-10 border border-slate-200 rounded-lg text-sm text-slate-800 font-mono focus:outline-none focus:border-purple-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* WhatsApp Phone Number */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
+                      WhatsApp Phone Number (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. +91 9876543210"
+                      value={assignPhone}
+                      onChange={(e) => setAssignPhone(e.target.value)}
+                      className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+
+                  {/* Submit buttons */}
+                  <div className="flex gap-3 pt-3 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setIsRoleModalOpen(false)}
+                      className="flex-1 h-10 border border-slate-200 hover:bg-slate-50 rounded-xl text-sm font-medium text-slate-700 transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={assignLoading}
+                      className="flex-1 h-10 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold transition-all shadow-md cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      {assignLoading ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Creating...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Key className="w-4 h-4" />
+                          <span>Assign & Generate</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -1313,6 +1313,156 @@ app.post('/api/users/presence', async (req, res) => {
   }
 });
 
+// ------------------------------------------------------------------------
+// SUPER ADMIN ROLE ASSIGNMENT & CREATOR API
+// ------------------------------------------------------------------------
+app.post('/api/admin/users/assign-role', requireSuperAdmin, async (req: any, res: any) => {
+  try {
+    const { userId, username, password, full_name, role } = req.body;
+    if (!username || !password || !full_name || !role) {
+      return res.status(400).json({ error: 'Username, password, full_name, and role are required.' });
+    }
+
+    const roleNormalized = role.toLowerCase().includes('super') ? 'super_admin' : 'admin';
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const nowStr = new Date().toISOString();
+
+    const adminClient = getSupabaseAdmin();
+    let savedInSupabase = false;
+
+    if (adminClient) {
+      try {
+        const { data: existing } = await adminClient
+          .from('admin_users')
+          .select('id')
+          .or(`username.eq.${username}${userId ? `,id.eq.${userId}` : ''}`);
+
+        if (existing && existing.length > 0) {
+          const { error: updErr } = await adminClient
+            .from('admin_users')
+            .update({
+              username,
+              password_hash: hashedPassword,
+              full_name,
+              role: roleNormalized,
+              updated_at: nowStr
+            })
+            .eq('id', existing[0].id);
+
+          if (!updErr) savedInSupabase = true;
+        } else {
+          const newAdmin = {
+            id: userId || crypto.randomUUID(),
+            username,
+            password_hash: hashedPassword,
+            full_name,
+            role: roleNormalized,
+            status: 'active',
+            last_login_at: null,
+            created_at: nowStr,
+            updated_at: nowStr
+          };
+          const { error: insErr } = await adminClient
+            .from('admin_users')
+            .insert(newAdmin);
+
+          if (!insErr) savedInSupabase = true;
+        }
+      } catch (err: any) {
+        console.warn('[ASSIGN ROLE] Supabase insert/update warning:', err.message);
+      }
+    }
+
+    // Always update local fallback JSON as well
+    const fallbackAdmins = readFallbackAdmins();
+    const existingIdx = fallbackAdmins.findIndex(
+      a => a.username.toLowerCase() === username.toLowerCase() || (userId && a.id === userId)
+    );
+
+    if (existingIdx >= 0) {
+      fallbackAdmins[existingIdx] = {
+        ...fallbackAdmins[existingIdx],
+        username,
+        password_hash: hashedPassword,
+        full_name,
+        role: roleNormalized,
+        updated_at: nowStr
+      };
+    } else {
+      fallbackAdmins.push({
+        id: userId || crypto.randomUUID(),
+        username,
+        password_hash: hashedPassword,
+        full_name,
+        role: roleNormalized,
+        status: 'active',
+        last_login_at: null,
+        created_at: nowStr,
+        updated_at: nowStr
+      });
+    }
+    writeFallbackAdmins(fallbackAdmins);
+
+    // If userId provided, sync user role in users table too
+    if (userId && adminClient) {
+      try {
+        await adminClient.from('users').update({ role: roleNormalized === 'super_admin' ? 'Super Admin' : 'Admin' }).eq('id', userId);
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Role '${roleNormalized}' successfully assigned to ${full_name}`,
+      user: {
+        username,
+        full_name,
+        role: roleNormalized
+      }
+    });
+  } catch (err: any) {
+    console.error('Error assigning role:', err);
+    res.status(500).json({ error: 'Failed to assign role: ' + err.message });
+  }
+});
+
+app.get('/api/admin/users/roles', requireSuperAdmin, async (req: any, res: any) => {
+  try {
+    const adminClient = getSupabaseAdmin();
+    let dbAdmins: any[] = [];
+    if (adminClient) {
+      try {
+        const { data, error } = await adminClient
+          .from('admin_users')
+          .select('id, username, full_name, role, status, last_login_at, created_at');
+        if (!error && data) {
+          dbAdmins = data;
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    if (dbAdmins.length === 0) {
+      const fallbacks = readFallbackAdmins();
+      dbAdmins = fallbacks.map(f => ({
+        id: f.id,
+        username: f.username,
+        full_name: f.full_name,
+        role: f.role,
+        status: f.status,
+        last_login_at: f.last_login_at,
+        created_at: f.created_at
+      }));
+    }
+
+    res.json({ success: true, admins: dbAdmins });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/users', async (req, res) => {
   const { email, role, status, phone, name } = req.body;
   if (!email) {
