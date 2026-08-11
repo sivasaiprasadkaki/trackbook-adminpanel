@@ -2999,34 +2999,106 @@ app.get('/api/cloudinary/resources', async (req, res) => {
     }
   }
 
-  // If live Cloudinary returns no files or is not configured, load cloud resources from attachments DB
+  // If live Cloudinary returns no files or is not configured, load cloud resources from attachments & images DB tables
   if (!resources || resources.length === 0) {
     try {
       const supabase = getSupabaseAdmin();
       if (supabase) {
-        const { data: dbAttachments } = await supabase.from('attachments').select('*');
-        if (dbAttachments && dbAttachments.length > 0) {
-          resources = dbAttachments.map((att: any) => ({
-            public_id: `TrackBook Cloud/User Uploads/${att.id || att.name}`,
-            filename: att.name || 'attachment_file',
-            folder: 'TrackBook Cloud/User Uploads',
-            format: att.type ? att.type.split('/').pop() : 'png',
-            resource_type: att.type && att.type.includes('image') ? 'image' : 'raw',
+        const [imagesRes, aiAttsRes, manualAttsRes] = await Promise.all([
+          supabase.from('images').select('*').order('created_at', { ascending: false }),
+          supabase.from('ai_attachments').select('*').order('created_at', { ascending: false }),
+          supabase.from('attachments').select('*').order('created_at', { ascending: false }),
+        ]);
+
+        const imagesData = imagesRes.data || [];
+        const aiAttsData = aiAttsRes.data || [];
+        const manualAttsData = manualAttsRes.data || [];
+
+        // 1. Map images table (Cloudinary / user photo uploads)
+        const mappedImages = imagesData.map((img: any) => {
+          const rawUrl = img.image_url || img.url || img.secure_url || '';
+          const pid = img.public_id || (img.id ? `TrackBook Cloud/User Uploads/${img.id}` : 'TrackBook Cloud/User Uploads/image');
+          const folder = pid.includes('/') ? pid.substring(0, pid.lastIndexOf('/')) : 'TrackBook Cloud/User Uploads';
+          const filename = pid.split('/').pop() || img.file_name || 'receipt_image';
+          const ext = (rawUrl.split('.').pop()?.split('?')[0] || 'jpg').toLowerCase();
+
+          return {
+            public_id: pid,
+            filename: filename,
+            folder: folder,
+            format: ext,
+            resource_type: 'image',
+            type: 'upload',
+            created_at: img.created_at || new Date().toISOString(),
+            updated_at: img.created_at || new Date().toISOString(),
+            bytes: img.bytes || 120000,
+            width: img.width || null,
+            height: img.height || null,
+            url: rawUrl,
+            secure_url: rawUrl,
+            tags: ['cloudinary', 'user-upload'],
+            context: { caption: img.caption || 'Uploaded Receipt', user_name: img.user_name || 'Customer User' }
+          };
+        });
+
+        // 2. Map ai_attachments table (AI receipts)
+        const mappedAiAtts = aiAttsData.map((att: any) => {
+          const rawUrl = att.file_url || att.url || att.image_url || '';
+          const pid = att.public_id || `TrackBook Cloud/AI Receipts/${att.id || att.file_name || 'ai_doc'}`;
+          const folder = pid.includes('/') ? pid.substring(0, pid.lastIndexOf('/')) : 'TrackBook Cloud/AI Receipts';
+          const filename = att.file_name || att.name || 'ai_receipt';
+          const ext = (att.file_type || rawUrl.split('.').pop()?.split('?')[0] || 'jpeg').toLowerCase();
+
+          return {
+            public_id: pid,
+            filename: filename,
+            folder: folder,
+            format: ext,
+            resource_type: ext.match(/(pdf|doc|docx|csv|xlsx|zip)/) ? 'raw' : 'image',
             type: 'upload',
             created_at: att.created_at || new Date().toISOString(),
             updated_at: att.created_at || new Date().toISOString(),
-            bytes: att.size || 102400,
+            bytes: att.file_size || 980000,
             width: null,
             height: null,
-            url: att.url,
-            secure_url: att.url,
-            tags: ['user-upload', 'attachment'],
-            context: { caption: att.description || 'Uploaded Document', user_name: att.user_name || 'Customer User' }
-          }));
-        }
+            url: rawUrl,
+            secure_url: rawUrl,
+            tags: ['ai-attachment', 'receipt'],
+            context: { caption: att.entry_title || 'AI Audit Attachment', user_name: att.user_name || 'Customer User' }
+          };
+        });
+
+        // 3. Map manual attachments table
+        const mappedManualAtts = manualAttsData.map((att: any) => {
+          const rawUrl = att.file_url || att.url || att.image_url || '';
+          const pid = att.public_id || `TrackBook Cloud/Manual Attachments/${att.id || att.file_name || 'manual_doc'}`;
+          const folder = pid.includes('/') ? pid.substring(0, pid.lastIndexOf('/')) : 'TrackBook Cloud/Manual Attachments';
+          const filename = att.file_name || att.name || 'attachment_file';
+          const ext = (att.file_type || rawUrl.split('.').pop()?.split('?')[0] || 'pdf').toLowerCase();
+
+          return {
+            public_id: pid,
+            filename: filename,
+            folder: folder,
+            format: ext,
+            resource_type: ext.match(/(pdf|doc|docx|csv|xlsx|zip)/) ? 'raw' : 'image',
+            type: 'upload',
+            created_at: att.created_at || new Date().toISOString(),
+            updated_at: att.created_at || new Date().toISOString(),
+            bytes: att.file_size || 102400,
+            width: null,
+            height: null,
+            url: rawUrl,
+            secure_url: rawUrl,
+            tags: ['manual-attachment', 'user-upload'],
+            context: { caption: att.description || 'Manual Attachment', user_name: att.user_name || 'Customer User' }
+          };
+        });
+
+        resources = [...mappedImages, ...mappedAiAtts, ...mappedManualAtts];
       }
     } catch (dbErr) {
-      console.error('Error fetching attachments for Cloud Storage:', dbErr);
+      console.error('Error fetching fallback storage items from database:', dbErr);
     }
   }
 
@@ -3045,23 +3117,26 @@ app.get('/api/cloudinary/resources', async (req, res) => {
   res.json({
     success: true,
     folders: Array.from(foldersSet).sort(),
-    resources: resources.map(r => ({
-      public_id: r.public_id,
-      filename: r.filename || r.public_id.split('/').pop(),
-      folder: r.folder || '',
-      format: r.format || r.public_id.split('.').pop() || '',
-      resource_type: r.resource_type || 'raw',
-      type: r.type || 'upload',
-      created_at: r.created_at || new Date().toISOString(),
-      updated_at: r.updated_at || r.created_at || new Date().toISOString(),
-      bytes: r.bytes || 0,
-      width: r.width || null,
-      height: r.height || null,
-      url: r.url || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=800&auto=format&fit=crop&q=80',
-      secure_url: r.secure_url || r.url || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=800&auto=format&fit=crop&q=80',
-      tags: r.tags || [],
-      context: r.context || {}
-    }))
+    resources: resources.map(r => {
+      const itemUrl = r.url || r.secure_url || r.image_url || r.file_url || '';
+      return {
+        public_id: r.public_id,
+        filename: r.filename || r.public_id.split('/').pop(),
+        folder: r.folder || '',
+        format: r.format || r.public_id.split('.').pop() || '',
+        resource_type: r.resource_type || 'raw',
+        type: r.type || 'upload',
+        created_at: r.created_at || new Date().toISOString(),
+        updated_at: r.updated_at || r.created_at || new Date().toISOString(),
+        bytes: r.bytes || 0,
+        width: r.width || null,
+        height: r.height || null,
+        url: itemUrl,
+        secure_url: r.secure_url || itemUrl,
+        tags: r.tags || [],
+        context: r.context || {}
+      };
+    })
   });
 });
 
