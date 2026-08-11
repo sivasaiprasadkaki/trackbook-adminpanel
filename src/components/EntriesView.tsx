@@ -185,6 +185,8 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true }: Entr
         body: JSON.stringify({
           userId: selectedUser.id,
           userName: selectedUser.name,
+          userRole: selectedUser.role || 'User',
+          userType: selectedUser.role?.toLowerCase().includes('admin') ? 'Admin' : 'Customer',
           cashbookId: selectedCashbook.id,
           amount: parseFloat(formData.amount),
           type: formData.type,
@@ -198,20 +200,6 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true }: Entr
 
       if (res.ok) {
         showNotification('Transaction recorded successfully!');
-        
-        // Log user audit activity
-        fetch('/api/audit-logs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_name: selectedUser?.name || selectedUser?.email || 'Customer User',
-            user_role: selectedUser?.role || 'User',
-            user_type: selectedUser?.role?.toLowerCase().includes('admin') ? 'Admin' : 'Customer',
-            action: `Transaction Recorded (${formData.type === 'out' ? 'Cash Out' : 'Cash In'})`,
-            details: `Recorded ₹${formData.amount} - ${formData.description} (${formData.category})`,
-            format: 'Cashbook'
-          })
-        }).catch(() => {});
 
         setFormData(prev => ({
           ...prev,
@@ -1015,6 +1003,9 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true }: Entr
                                     alt="thumb"
                                     referrerPolicy="no-referrer"
                                     className="w-8 h-8 object-cover"
+                                    onError={(e) => {
+                                      (e.currentTarget as HTMLImageElement).src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23f1f5f9"/><text x="50" y="58" font-family="sans-serif" font-size="28" text-anchor="middle">🖼️</text></svg>`;
+                                    }}
                                   />
                                 )}
                               </button>
@@ -1148,6 +1139,9 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true }: Entr
                               alt="Attachment preview"
                               referrerPolicy="no-referrer"
                               className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><rect width="400" height="300" fill="%23f8fafc"/><rect x="20" y="20" width="360" height="260" rx="12" fill="%23eff6ff" stroke="%23bfdbfe" stroke-width="2"/><text x="200" y="130" font-family="sans-serif" font-size="36" text-anchor="middle">🧾</text><text x="200" y="175" font-family="sans-serif" font-size="14" font-weight="bold" fill="%231e40af" text-anchor="middle">${encodeURIComponent(firstAttachment.name || 'Receipt Asset')}</text><text x="200" y="205" font-family="sans-serif" font-size="11" fill="%2364748b" text-anchor="middle">Ledger Entry Attachment</text></svg>`;
+                              }}
                             />
                             <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                               <button
@@ -1253,6 +1247,10 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true }: Entr
                   alt="Full receipt"
                   referrerPolicy="no-referrer"
                   className="max-w-full max-h-[400px] object-contain rounded-lg shadow border border-slate-200"
+                  onError={(e) => {
+                    const fallbackSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="%230f172a"/><rect x="40" y="40" width="520" height="320" rx="16" fill="%231e293b" stroke="%23334155" stroke-width="2"/><circle cx="300" cy="140" r="36" fill="%232563eb" opacity="0.2"/><text x="300" y="152" font-family="sans-serif" font-size="36" text-anchor="middle">🧾</text><text x="300" y="210" font-family="sans-serif" font-size="18" font-weight="bold" fill="%23f8fafc" text-anchor="middle">${encodeURIComponent(previewAttachment.name || 'Receipt Document')}</text><text x="300" y="240" font-family="sans-serif" font-size="12" fill="%2394a3b8" text-anchor="middle">Ledger Audit Attachment Asset</text><text x="300" y="270" font-family="sans-serif" font-size="11" fill="%2338bdf8" text-anchor="middle">Cloud Storage Image Preview Asset</text></svg>`;
+                    (e.currentTarget as HTMLImageElement).src = fallbackSvg;
+                  }}
                 />
               )}
             </div>

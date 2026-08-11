@@ -482,76 +482,17 @@ interface AuditLog {
   duration_mins?: number;
 }
 
-const DEFAULT_SEED_AUDIT_LOGS: AuditLog[] = [
-  {
-    id: 'log-seed-1',
-    timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-    user_name: 'Rahul Sharma',
-    user_role: 'User',
-    user_type: 'Customer',
-    action: 'PDF Statement Exported',
-    details: 'Downloaded monthly financial ledger summary in PDF format',
-    format: 'PDF',
-    ip_address: '157.32.44.12',
-    duration_mins: 12
-  },
-  {
-    id: 'log-seed-2',
-    timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-    user_name: 'Ananya Verma',
-    user_role: 'User',
-    user_type: 'Customer',
-    action: 'Transaction Recorded (Cash In)',
-    details: 'Added entry ₹15,000 - Sales Invoice Payment (Category: Income)',
-    format: 'Cashbook',
-    ip_address: '103.21.124.89',
-    duration_mins: 25
-  },
-  {
-    id: 'log-seed-3',
-    timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-    user_name: 'Siva Sai Prasad',
-    user_role: 'Super Admin',
-    user_type: 'Admin',
-    action: 'Navigated to Cloud Section',
-    details: 'Active roaming & inspecting Cloud Manager panel',
-    format: 'System',
-    ip_address: '127.0.0.1',
-    duration_mins: 18
-  },
-  {
-    id: 'log-seed-4',
-    timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
-    user_name: 'Vikram Reddy',
-    user_role: 'Customer',
-    user_type: 'Customer',
-    action: 'Excel Ledger Downloaded',
-    details: 'Exported quarterly transaction history to XLSX Excel spreadsheet',
-    format: 'Excel',
-    ip_address: '182.72.10.45',
-    duration_mins: 14
-  },
-  {
-    id: 'log-seed-5',
-    timestamp: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
-    user_name: 'Priya Patel',
-    user_role: 'User',
-    user_type: 'Customer',
-    action: 'Cashbook Created',
-    details: 'Created new cashbook: Daily Store Ledger',
-    format: 'Cashbook',
-    ip_address: '117.200.12.33',
-    duration_mins: 8
-  }
-];
+const DEFAULT_SEED_AUDIT_LOGS: AuditLog[] = [];
 
 function readAuditLogs(): AuditLog[] {
   try {
     if (fs.existsSync(AUDIT_LOG_FILE)) {
       const content = fs.readFileSync(AUDIT_LOG_FILE, 'utf8');
       const parsed: AuditLog[] = JSON.parse(content);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map(log => {
+      if (Array.isArray(parsed)) {
+        // Filter out any mock/seed sample logs
+        const realLogs = parsed.filter(log => !log.id.startsWith('log-seed-'));
+        return realLogs.map(log => {
           const roleLower = (log.user_role || '').toLowerCase();
           const isAdminRole = roleLower.includes('admin') || log.user_role === 'Super Admin';
           
@@ -566,8 +507,8 @@ function readAuditLogs(): AuditLog[] {
   } catch (err) {
     console.error('[AUDIT LOGS] Failed to read audit log file:', err);
   }
-  writeAuditLogs(DEFAULT_SEED_AUDIT_LOGS);
-  return DEFAULT_SEED_AUDIT_LOGS;
+  writeAuditLogs([]);
+  return [];
 }
 
 function writeAuditLogs(logs: AuditLog[]) {
@@ -806,6 +747,15 @@ authRouter.post('/login', async (req, res) => {
       },
       expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24 Hours
     };
+
+    recordAuditLog({
+      user_name: user.full_name || user.username,
+      user_role: (user.role || '').toLowerCase().includes('super') ? 'Super Admin' : 'Admin',
+      user_type: 'Admin',
+      action: 'Admin Portal Login',
+      details: `Admin authenticated successfully (@${user.username})`,
+      format: 'System'
+    });
 
     let encryptedSession = '';
     try {
@@ -1577,6 +1527,15 @@ app.post('/api/admin/users/assign-role', requireSuperAdmin, async (req: any, res
       }
     }
 
+    recordAuditLog({
+      user_name: full_name || username,
+      user_role: roleNormalized === 'super_admin' ? 'Super Admin' : 'Admin',
+      user_type: 'Admin',
+      action: 'Admin Access Role Assigned',
+      details: `Granted ${roleNormalized === 'super_admin' ? 'Super Admin' : 'Admin'} privileges to ${full_name} (@${username})`,
+      format: 'System'
+    });
+
     res.json({
       success: true,
       message: `Role '${roleNormalized}' successfully assigned to ${full_name}`,
@@ -1845,6 +1804,15 @@ app.post('/api/users', async (req, res) => {
     const emailPrefix = email.split('@')[0];
     const computedName = name || emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
 
+    recordAuditLog({
+      user_name: computedName,
+      user_role: role || 'Customer',
+      user_type: (role || '').toLowerCase().includes('admin') ? 'Admin' : 'Customer',
+      action: 'Customer Account Created',
+      details: `Registered new user account: ${computedName} (${email}) - Status: ${isEmailConfirm ? 'Active' : 'Pending'}`,
+      format: 'System'
+    });
+
     res.status(201).json({
       id,
       name: computedName,
@@ -1907,6 +1875,15 @@ app.put('/api/users/:id', async (req, res) => {
     const emailPrefix = (email || 'user').split('@')[0];
     const computedName = name || emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
 
+    recordAuditLog({
+      user_name: computedName,
+      user_role: role || 'Customer',
+      user_type: (role || '').toLowerCase().includes('admin') ? 'Admin' : 'Customer',
+      action: 'Customer Profile Updated',
+      details: `Updated details for ${computedName} (${email || ''}) - Status: ${status || 'Active'}`,
+      format: 'System'
+    });
+
     res.json({
       id,
       name: computedName,
@@ -1949,6 +1926,16 @@ app.delete('/api/users/:id', requireSuperAdmin, async (req, res) => {
       .eq('id', id);
 
     if (error) throw error;
+
+    recordAuditLog({
+      user_name: 'Admin / System',
+      user_role: 'Super Admin',
+      user_type: 'Admin',
+      action: 'Customer Account Removed',
+      details: `Removed user account ID: ${id} from registry`,
+      format: 'System'
+    });
+
     res.json({ success: true });
   } catch (err: any) {
     console.error('Supabase user delete error:', err);
@@ -2198,6 +2185,16 @@ app.post('/api/cashbooks', async (req, res) => {
       return res.status(500).json({ error: lastError.message || 'Database insert failed' });
     }
 
+    const isCreatorAdmin = createdByVal.toLowerCase().includes('admin');
+    recordAuditLog({
+      user_name: managerName || 'User',
+      user_role: isCreatorAdmin ? 'Admin' : 'Customer',
+      user_type: isCreatorAdmin ? 'Admin' : 'Customer',
+      action: 'Cashbook Ledger Created',
+      details: `Created new cashbook: "${name}" assigned to ${managerName}`,
+      format: 'Cashbook'
+    });
+
     res.status(201).json({
       id,
       name,
@@ -2243,6 +2240,15 @@ app.delete('/api/cashbooks/:id', requireSuperAdmin, async (req, res) => {
       .eq('id', id);
 
     if (error) throw error;
+
+    recordAuditLog({
+      user_name: 'Super Admin',
+      user_role: 'Super Admin',
+      user_type: 'Admin',
+      action: 'Cashbook Ledger Deleted',
+      details: `Deleted cashbook ledger ID: ${id} along with associated entries`,
+      format: 'Cashbook'
+    });
 
     res.json({ success: true, message: 'Cashbook and associated entries deleted successfully.' });
   } catch (err: any) {
@@ -2420,6 +2426,18 @@ app.post('/api/entries', async (req, res) => {
 
     console.log(`[DEBUG] Entry created successfully with ID: ${id}`);
 
+    const reqUserRole = req.body.userRole || 'User';
+    const reqUserType = req.body.userType || (reqUserRole.toLowerCase().includes('admin') ? 'Admin' : 'Customer');
+
+    recordAuditLog({
+      user_name: userName || 'Customer User',
+      user_role: reqUserRole,
+      user_type: reqUserType,
+      action: `Transaction Recorded (${type === 'cash_in' || type === 'in' ? 'Cash In' : 'Cash Out'})`,
+      details: `Added entry ₹${Number(amount).toLocaleString('en-IN')} - ${description || 'Ledger Entry'} (Category: ${category || 'General'})`,
+      format: 'Cashbook'
+    });
+
     res.status(201).json({
       id,
       userId: userId || 'u-admin',
@@ -2457,6 +2475,15 @@ app.delete('/api/entries/:id', requireSuperAdmin, async (req, res) => {
       .eq('id', id);
 
     if (error) throw error;
+
+    recordAuditLog({
+      user_name: 'Super Admin',
+      user_role: 'Super Admin',
+      user_type: 'Admin',
+      action: 'Transaction Deleted',
+      details: `Deleted transaction entry ID: ${id}`,
+      format: 'Cashbook'
+    });
 
     res.json({ success: true, message: 'Entry deleted successfully.' });
   } catch (err: any) {
@@ -2942,93 +2969,7 @@ app.post('/api/process-receipt', async (req, res) => {
 
 // --- CLOUDINARY CLOUD STORAGE MANAGER API ---
 
-const DEFAULT_CLOUD_STORAGE_RESOURCES = [
-  {
-    public_id: 'TrackBook Cloud/Receipts/scanned_receipt_001',
-    filename: 'scanned_receipt_001.jpg',
-    folder: 'TrackBook Cloud/Receipts',
-    format: 'jpg',
-    resource_type: 'image',
-    type: 'upload',
-    created_at: new Date(Date.now() - 1000 * 3600 * 2).toISOString(),
-    updated_at: new Date(Date.now() - 1000 * 3600 * 2).toISOString(),
-    bytes: 245000,
-    width: 800,
-    height: 1200,
-    url: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=800&auto=format&fit=crop&q=80',
-    secure_url: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=800&auto=format&fit=crop&q=80',
-    tags: ['receipt', 'tax-invoice', 'verified'],
-    context: { caption: 'Store Purchase Invoice', user_name: 'Siva Sai Prasad' }
-  },
-  {
-    public_id: 'TrackBook Cloud/Statements/monthly_ledger_august',
-    filename: 'monthly_ledger_august.pdf',
-    folder: 'TrackBook Cloud/Statements',
-    format: 'pdf',
-    resource_type: 'raw',
-    type: 'upload',
-    created_at: new Date(Date.now() - 1000 * 3600 * 5).toISOString(),
-    updated_at: new Date(Date.now() - 1000 * 3600 * 5).toISOString(),
-    bytes: 1240000,
-    width: null,
-    height: null,
-    url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-    secure_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-    tags: ['statement', 'monthly-report', 'pdf'],
-    context: { caption: 'August Financial Statement', user_name: 'Admin System' }
-  },
-  {
-    public_id: 'TrackBook Cloud/Statements/q2_financial_report',
-    filename: 'q2_financial_report.xlsx',
-    folder: 'TrackBook Cloud/Statements',
-    format: 'xlsx',
-    resource_type: 'raw',
-    type: 'upload',
-    created_at: new Date(Date.now() - 1000 * 3600 * 12).toISOString(),
-    updated_at: new Date(Date.now() - 1000 * 3600 * 12).toISOString(),
-    bytes: 890000,
-    width: null,
-    height: null,
-    url: 'https://sample-videos.com/xls/Sample-Spreadsheet-10-rows.xls',
-    secure_url: 'https://sample-videos.com/xls/Sample-Spreadsheet-10-rows.xls',
-    tags: ['excel', 'q2-ledger', 'audit'],
-    context: { caption: 'Q2 Ledger Excel Sheet', user_name: 'Siva Sai Prasad' }
-  },
-  {
-    public_id: 'TrackBook Cloud/Invoices/vendor_office_supplies',
-    filename: 'vendor_office_supplies.pdf',
-    folder: 'TrackBook Cloud/Invoices',
-    format: 'pdf',
-    resource_type: 'raw',
-    type: 'upload',
-    created_at: new Date(Date.now() - 1000 * 3600 * 24).toISOString(),
-    updated_at: new Date(Date.now() - 1000 * 3600 * 24).toISOString(),
-    bytes: 540000,
-    width: null,
-    height: null,
-    url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-    secure_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-    tags: ['invoice', 'office-supplies'],
-    context: { caption: 'Office Supplies Vendor Invoice', user_name: 'Rahul Sharma' }
-  },
-  {
-    public_id: 'TrackBook Cloud/User Uploads/client_tax_certificate',
-    filename: 'client_tax_certificate.png',
-    folder: 'TrackBook Cloud/User Uploads',
-    format: 'png',
-    resource_type: 'image',
-    type: 'upload',
-    created_at: new Date(Date.now() - 1000 * 3600 * 48).toISOString(),
-    updated_at: new Date(Date.now() - 1000 * 3600 * 48).toISOString(),
-    bytes: 620000,
-    width: 1200,
-    height: 900,
-    url: 'https://images.unsplash.com/photo-1450133064473-71024230f91b?w=800&auto=format&fit=crop&q=80',
-    secure_url: 'https://images.unsplash.com/photo-1450133064473-71024230f91b?w=800&auto=format&fit=crop&q=80',
-    tags: ['tax', 'compliance', 'certificate'],
-    context: { caption: 'Tax Clearance Certificate', user_name: 'Ananya Verma' }
-  }
-];
+const DEFAULT_CLOUD_STORAGE_RESOURCES: any[] = [];
 
 // 1. Get configuration status
 app.get('/api/cloudinary/config', (req, res) => {
@@ -3042,13 +2983,7 @@ app.get('/api/cloudinary/config', (req, res) => {
 // 2. Fetch all folders and resources recursively from Cloudinary
 app.get('/api/cloudinary/resources', async (req, res) => {
   let resources: any[] = [];
-  const foldersSet = new Set<string>([
-    'TrackBook Cloud',
-    'TrackBook Cloud/Receipts',
-    'TrackBook Cloud/Statements',
-    'TrackBook Cloud/Invoices',
-    'TrackBook Cloud/User Uploads'
-  ]);
+  const foldersSet = new Set<string>(['TrackBook Cloud']);
 
   if (isCloudinaryConfigured) {
     try {
@@ -3064,14 +2999,14 @@ app.get('/api/cloudinary/resources', async (req, res) => {
     }
   }
 
-  // If live Cloudinary returns no files or is not configured, load cloud resources from local attachments & default storage
+  // If live Cloudinary returns no files or is not configured, load cloud resources from attachments DB
   if (!resources || resources.length === 0) {
     try {
       const supabase = getSupabaseAdmin();
       if (supabase) {
         const { data: dbAttachments } = await supabase.from('attachments').select('*');
         if (dbAttachments && dbAttachments.length > 0) {
-          const mapped = dbAttachments.map((att: any) => ({
+          resources = dbAttachments.map((att: any) => ({
             public_id: `TrackBook Cloud/User Uploads/${att.id || att.name}`,
             filename: att.name || 'attachment_file',
             folder: 'TrackBook Cloud/User Uploads',
@@ -3083,20 +3018,15 @@ app.get('/api/cloudinary/resources', async (req, res) => {
             bytes: att.size || 102400,
             width: null,
             height: null,
-            url: att.url || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=800&auto=format&fit=crop&q=80',
-            secure_url: att.url || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=800&auto=format&fit=crop&q=80',
+            url: att.url,
+            secure_url: att.url,
             tags: ['user-upload', 'attachment'],
             context: { caption: att.description || 'Uploaded Document', user_name: att.user_name || 'Customer User' }
           }));
-          resources = [...mapped, ...DEFAULT_CLOUD_STORAGE_RESOURCES];
-        } else {
-          resources = [...DEFAULT_CLOUD_STORAGE_RESOURCES];
         }
-      } else {
-        resources = [...DEFAULT_CLOUD_STORAGE_RESOURCES];
       }
     } catch (dbErr) {
-      resources = [...DEFAULT_CLOUD_STORAGE_RESOURCES];
+      console.error('Error fetching attachments for Cloud Storage:', dbErr);
     }
   }
 

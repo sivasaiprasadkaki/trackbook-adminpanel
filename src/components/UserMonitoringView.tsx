@@ -83,12 +83,16 @@ export default function UserMonitoringView({ isSuperAdmin = true }: UserMonitori
   };
 
   useEffect(() => {
+    if (!isSuperAdmin) {
+      setLoading(false);
+      return;
+    }
     fetchAuditData(true);
     const interval = setInterval(() => {
       fetchAuditData(false);
     }, 8000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isSuperAdmin]);
 
   const triggerToast = (msg: string) => {
     setNotification(msg);
@@ -157,6 +161,20 @@ export default function UserMonitoringView({ isSuperAdmin = true }: UserMonitori
     if (hrs === 0) return `${mins}m`;
     return `${hrs}h ${mins}m`;
   };
+
+  if (!isSuperAdmin) {
+    return (
+      <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-xl mx-auto my-12 text-center shadow-xs">
+        <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-4 border border-amber-200/60">
+          <ShieldCheck className="w-6 h-6" />
+        </div>
+        <h3 className="text-lg font-bold text-slate-900 font-sans tracking-tight">Access Restricted</h3>
+        <p className="text-slate-500 text-sm mt-2 leading-relaxed">
+          User Activity Monitoring & Tracking is restricted to Super Admin accounts only.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

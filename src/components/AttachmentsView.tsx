@@ -680,7 +680,15 @@ export default function AttachmentsView({ isSuperAdmin = true }: AttachmentsView
                             <div className="flex items-center gap-3">
                               <div className={`w-11 h-11 rounded-lg flex items-center justify-center overflow-hidden shrink-0 ${getFileIconBg(att.fileType)}`}>
                                 {isImage && att.fileUrl ? (
-                                  <img src={att.fileUrl} alt="Thumbnail" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                  <img
+                                    src={att.fileUrl}
+                                    alt="Thumbnail"
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                    onError={(e) => {
+                                      (e.currentTarget as HTMLImageElement).src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23f1f5f9"/><text x="50" y="58" font-family="sans-serif" font-size="28" text-anchor="middle">🖼️</text></svg>`;
+                                    }}
+                                  />
                                 ) : (
                                   getFileIcon(att.fileType)
                                 )}
@@ -818,6 +826,9 @@ export default function AttachmentsView({ isSuperAdmin = true }: AttachmentsView
                             alt={att.fileName}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                             referrerPolicy="no-referrer"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><rect width="400" height="300" fill="%23f8fafc"/><rect x="20" y="20" width="360" height="260" rx="12" fill="%23eff6ff" stroke="%23bfdbfe" stroke-width="2"/><text x="200" y="130" font-family="sans-serif" font-size="36" text-anchor="middle">🧾</text><text x="200" y="175" font-family="sans-serif" font-size="14" font-weight="bold" fill="%231e40af" text-anchor="middle">${encodeURIComponent(att.fileName || 'Receipt Asset')}</text><text x="200" y="205" font-family="sans-serif" font-size="11" fill="%2364748b" text-anchor="middle">Audit Ledger Attachment</text></svg>`;
+                            }}
                           />
                         ) : (
                           <div className="flex flex-col items-center gap-2">
@@ -987,6 +998,10 @@ export default function AttachmentsView({ isSuperAdmin = true }: AttachmentsView
                   alt={previewAttachment.fileName}
                   className="max-w-full max-h-full object-contain rounded-md shadow-lg"
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    const fallbackSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="%230f172a"/><rect x="40" y="40" width="520" height="320" rx="16" fill="%231e293b" stroke="%23334155" stroke-width="2"/><circle cx="300" cy="140" r="36" fill="%232563eb" opacity="0.2"/><text x="300" y="152" font-family="sans-serif" font-size="36" text-anchor="middle">🧾</text><text x="300" y="210" font-family="sans-serif" font-size="18" font-weight="bold" fill="%23f8fafc" text-anchor="middle">${encodeURIComponent(previewAttachment.fileName)}</text><text x="300" y="240" font-family="sans-serif" font-size="12" fill="%2394a3b8" text-anchor="middle">TrackBook Audit Receipt (${encodeURIComponent(previewAttachment.fileType)})</text><text x="300" y="270" font-family="sans-serif" font-size="11" fill="%2338bdf8" text-anchor="middle">Cloud Storage Image Preview Asset</text></svg>`;
+                    (e.currentTarget as HTMLImageElement).src = fallbackSvg;
+                  }}
                 />
               ) : (
                 <div className="text-center text-white p-8 max-w-sm">

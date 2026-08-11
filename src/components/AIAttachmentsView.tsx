@@ -67,8 +67,14 @@ interface AIAttachmentsViewProps {
 }
 
 export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = true }: AIAttachmentsViewProps) {
-  // Cloud Section Navigation Sub-Tabs: default to 'monitoring' so User Activity Monitoring & Tracking opens directly
-  const [cloudSubTab, setCloudSubTab] = useState<'monitoring' | 'storage'>('monitoring');
+  // Cloud Section Navigation Sub-Tabs: default to 'monitoring' for Super Admin, 'storage' for normal Admin
+  const [cloudSubTab, setCloudSubTab] = useState<'monitoring' | 'storage'>(isSuperAdmin ? 'monitoring' : 'storage');
+
+  useEffect(() => {
+    if (!isSuperAdmin && cloudSubTab === 'monitoring') {
+      setCloudSubTab('storage');
+    }
+  }, [isSuperAdmin, cloudSubTab]);
 
   // Config & Data States
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -394,9 +400,17 @@ export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = tru
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
+  const isImageFile = (file?: CloudFile | null) => {
+    if (!file) return false;
+    const fmt = (file.format || '').toLowerCase();
+    const resType = (file.resource_type || '').toLowerCase();
+    const imageExts = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'bmp', 'avif', 'ico'];
+    return (resType === 'image' || imageExts.includes(fmt)) && fmt !== 'pdf';
+  };
+
   const getFileIcon = (format: string, resourceType: string) => {
-    const fmt = format.toLowerCase();
-    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(fmt)) {
+    const fmt = (format || '').toLowerCase();
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(fmt) || resourceType === 'image') {
       return <ImageIcon className="w-5 h-5 text-blue-500" />;
     }
     if (fmt === 'pdf') {
@@ -606,18 +620,20 @@ export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = tru
       {/* Cloud Top Navigation Switcher */}
       <div className="bg-white border border-slate-200 rounded-2xl p-2 shadow-xs flex items-center justify-between gap-3">
         <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl w-full sm:w-auto">
-          <button
-            onClick={() => setCloudSubTab('monitoring')}
-            className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
-              cloudSubTab === 'monitoring'
-                ? 'bg-blue-600 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-            }`}
-          >
-            <Activity className="w-4 h-4" />
-            <span>User Activity Monitoring & Tracking</span>
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping ml-0.5"></span>
-          </button>
+          {isSuperAdmin && (
+            <button
+              onClick={() => setCloudSubTab('monitoring')}
+              className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                cloudSubTab === 'monitoring'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <Activity className="w-4 h-4" />
+              <span>User Activity Monitoring & Tracking</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping ml-0.5"></span>
+            </button>
+          )}
 
           <button
             onClick={() => setCloudSubTab('storage')}
@@ -988,7 +1004,7 @@ export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = tru
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               {filteredFiles.map(file => {
                 const user = getUserNameFromFile(file);
-                const isImg = file.resource_type === 'image' && file.format !== 'pdf';
+                const isImg = isImageFile(file);
 
                 return (
                   <div key={file.public_id} className="bg-white border border-slate-200 rounded-xl overflow-hidden hover:border-blue-400 transition-all duration-200 shadow-sm flex flex-col group">
@@ -997,9 +1013,12 @@ export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = tru
                     <div className="relative aspect-video bg-slate-50 border-b border-slate-100 flex items-center justify-center overflow-hidden">
                       {isImg ? (
                         <img
-                          src={file.secure_url}
+                          src={file.secure_url || file.url}
                           alt={file.filename}
                           referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><rect width="400" height="300" fill="%23f8fafc"/><rect x="20" y="20" width="360" height="260" rx="12" fill="%23eff6ff" stroke="%23bfdbfe" stroke-width="2"/><text x="200" y="140" font-family="sans-serif" font-size="16" font-weight="bold" fill="%232563eb" text-anchor="middle">📷 ${encodeURIComponent(file.filename)}</text><text x="200" y="170" font-family="sans-serif" font-size="12" fill="%2364748b" text-anchor="middle">Format: ${encodeURIComponent(file.format.toUpperCase())} Asset</text></svg>`;
+                          }}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                         />
                       ) : (
@@ -1270,15 +1289,18 @@ export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = tru
             <div className="flex-1 p-6 overflow-y-auto bg-slate-50 flex items-center justify-center min-h-[350px]">
               {previewFile.format.toLowerCase() === 'pdf' ? (
                 <iframe
-                  src={previewFile.secure_url}
+                  src={previewFile.secure_url || previewFile.url}
                   className="w-full h-[550px] border border-slate-200 rounded-lg shadow-sm"
                   title="PDF Preview"
                 />
-              ) : previewFile.resource_type === 'image' ? (
+              ) : isImageFile(previewFile) ? (
                 <img
-                  src={previewFile.secure_url}
+                  src={previewFile.secure_url || previewFile.url}
                   alt={previewFile.filename}
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="%23f8fafc"/><rect x="30" y="30" width="540" height="340" rx="16" fill="%23eff6ff" stroke="%23bfdbfe" stroke-width="2"/><text x="300" y="180" font-family="sans-serif" font-size="20" font-weight="bold" fill="%232563eb" text-anchor="middle">🖼️ ${encodeURIComponent(previewFile.filename)}</text><text x="300" y="220" font-family="sans-serif" font-size="14" fill="%2364748b" text-anchor="middle">TrackBook Cloud Storage Asset (${encodeURIComponent(previewFile.format.toUpperCase())})</text></svg>`;
+                  }}
                   className="max-w-full max-h-[500px] object-contain rounded-lg shadow border border-slate-200"
                 />
               ) : (
