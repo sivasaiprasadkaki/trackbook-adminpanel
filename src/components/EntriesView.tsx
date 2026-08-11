@@ -25,6 +25,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { Entry, Cashbook, User as AppUser } from '../types';
+import { DateRangeFilter, isDateInRange } from '../utils/dateUtils';
 
 const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(input, { ...init, credentials: 'include' });
 
@@ -32,9 +33,10 @@ interface EntriesViewProps {
   onEntryLogged: () => void;
   entries: Entry[]; // Maintained for backward compatibility, but we fetch scoped entries dynamically
   isSuperAdmin?: boolean;
+  dateRange?: DateRangeFilter;
 }
 
-export default function EntriesView({ onEntryLogged, isSuperAdmin = true }: EntriesViewProps) {
+export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRange }: EntriesViewProps) {
   // Global directory states
   const [users, setUsers] = useState<AppUser[]>([]);
   const [cashbooks, setCashbooks] = useState<Cashbook[]>([]);
@@ -323,7 +325,10 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true }: Entr
       matchesDateRange = matchesDateRange && new Date(e.date) <= new Date(endDate);
     }
 
-    return matchesSearch && matchesCategory && matchesMode && matchesAiManual && matchesDateRange;
+    // Global Date range filter from Topbar
+    const matchesGlobalDate = isDateInRange(e.timestamp || e.date, dateRange);
+
+    return matchesSearch && matchesCategory && matchesMode && matchesAiManual && matchesDateRange && matchesGlobalDate;
   });
 
   return (

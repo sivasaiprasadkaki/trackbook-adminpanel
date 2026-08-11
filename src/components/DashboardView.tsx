@@ -17,9 +17,12 @@ import {
   Paperclip,
   ChevronDown,
   Sparkles,
-  FileText
+  FileText,
+  Calendar,
+  X
 } from 'lucide-react';
 import { Entry, DashboardStats } from '../types';
+import { DateRangeFilter, isDateInRange } from '../utils/dateUtils';
 
 const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(input, { ...init, credentials: 'include' });
 
@@ -27,9 +30,11 @@ interface DashboardViewProps {
   entries: Entry[];
   onAddEntryClick: () => void;
   onNavigateToTab: (tab: string) => void;
+  dateRange?: DateRangeFilter;
+  onResetDateRange?: () => void;
 }
 
-export default function DashboardView({ entries, onAddEntryClick, onNavigateToTab }: DashboardViewProps) {
+export default function DashboardView({ entries, onAddEntryClick, onNavigateToTab, dateRange, onResetDateRange }: DashboardViewProps) {
   const [stats, setStats] = useState<DashboardStats>({
     totalUsers: 0,
     activeUsers: 0,
@@ -51,7 +56,11 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
   const fetchStats = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/stats');
+      let url = '/api/stats';
+      if (dateRange && dateRange.preset !== 'all' && dateRange.startDate && dateRange.endDate) {
+        url += `?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}`;
+      }
+      const res = await fetch(url);
       const contentType = res.headers.get('content-type');
       if (res.ok && contentType && contentType.includes('application/json')) {
         const data = await res.json();
@@ -74,7 +83,7 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
       clearInterval(interval);
       window.removeEventListener('app-global-refresh', handleGlobalRefresh);
     };
-  }, [entries]);
+  }, [entries, dateRange]);
 
   // Format currency in Indian Rupees format (Lakhs/Crores)
   const formatINR = (value: number) => {
@@ -101,18 +110,20 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
-  // Reset page when search query changes
+  // Reset page when search query changes or date range changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery]);
+  }, [searchQuery, dateRange]);
 
   const filteredEntries = entries.filter(e => {
     const query = searchQuery.toLowerCase();
-    return (
+    const matchesSearch = (
       e.userName.toLowerCase().includes(query) ||
       e.action.toLowerCase().includes(query) ||
       e.cashbookName.toLowerCase().includes(query)
     );
+    const matchesDate = isDateInRange(e.timestamp || e.date, dateRange);
+    return matchesSearch && matchesDate;
   });
 
   // Sort entries by date/timestamp descending so newer entries appear at the very top
@@ -225,6 +236,37 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
             <span className="text-slate-300">•</span>
             <span>PRODUCTION STATE</span>
           </div>
+        </div>
+      )}
+
+      {/* Date Filter Active Notification Banner */}
+      {dateRange && dateRange.preset !== 'all' && (
+        <div className="bg-blue-50/90 border border-blue-200 rounded-xl p-3.5 shadow-xs flex items-center justify-between gap-3 text-xs text-blue-900 animate-fade-in">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold shrink-0">
+              <Calendar className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="font-bold">Active Date Filter:</span>{' '}
+              <span className="bg-white border border-blue-300 text-blue-700 px-2 py-0.5 rounded-md font-semibold">
+                {dateRange.label}
+              </span>{' '}
+              {dateRange.startDate && dateRange.endDate && (
+                <span className="text-blue-600 hidden sm:inline ml-1 font-mono text-[11px]">
+                  ({dateRange.startDate} to {dateRange.endDate})
+                </span>
+              )}
+            </div>
+          </div>
+          {onResetDateRange && (
+            <button
+              onClick={onResetDateRange}
+              className="px-2.5 py-1 text-[11px] font-semibold bg-white hover:bg-blue-100 border border-blue-300 text-blue-700 rounded-lg transition-colors flex items-center gap-1 cursor-pointer shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+              Reset Filter
+            </button>
+          )}
         </div>
       )}
 

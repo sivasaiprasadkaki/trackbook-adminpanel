@@ -24,15 +24,17 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { User } from '../types';
+import { DateRangeFilter, isDateInRange } from '../utils/dateUtils';
 
 const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(input, { ...init, credentials: 'include' });
 
 interface UsersViewProps {
   onRefreshStats?: () => void;
   isSuperAdmin?: boolean;
+  dateRange?: DateRangeFilter;
 }
 
-export default function UsersView({ onRefreshStats, isSuperAdmin = true }: UsersViewProps) {
+export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRange }: UsersViewProps) {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -563,9 +565,11 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true }: Users
         matchesTab = isRoleAdmin || isListedAdmin;
       }
 
-      return matchesSearch && matchesRole && matchesStatus && matchesTab;
+      const matchesDate = isDateInRange(user.joinedDate || user.lastSeen, dateRange);
+
+      return matchesSearch && matchesRole && matchesStatus && matchesTab && matchesDate;
     });
-  }, [users, adminUsers, activeTab, searchQuery, roleFilter, statusFilter]);
+  }, [users, adminUsers, activeTab, searchQuery, roleFilter, statusFilter, dateRange]);
 
   return (
     <div className="space-y-6">

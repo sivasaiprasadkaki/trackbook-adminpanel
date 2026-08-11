@@ -678,8 +678,8 @@ export default function AIAttachmentsView({ onProcessSuccess, isSuperAdmin = tru
         /* Main Container Grid for Cloud Storage */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
-        {/* LEFT PANEL: Cloudinary Folder Hierarchy & Sidebar (3 columns) */}
-        <div className="lg:col-span-3 bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col gap-5 min-h-[580px]">
+        {/* LEFT PANEL: Cloudinary Folder Hierarchy & Sidebar (3 columns) - Sticky on desktop */}
+        <div className="lg:col-span-3 lg:sticky lg:top-4 bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col gap-5 min-h-[480px] lg:max-h-[calc(100vh-7rem)] overflow-y-auto z-10 shrink-0">
           <div>
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">Storage Folders</span>

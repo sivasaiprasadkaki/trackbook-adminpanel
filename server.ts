@@ -948,16 +948,29 @@ app.get('/api/stats', async (req, res) => {
   }
 
   try {
+    const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
+    let startIso: string | null = null;
+    let endIso: string | null = null;
+    if (startDate && endDate) {
+      try {
+        startIso = new Date(startDate + 'T00:00:00').toISOString();
+        endIso = new Date(endDate + 'T23:59:59.999').toISOString();
+      } catch (e) {
+        console.error('Invalid date params in /api/stats:', e);
+      }
+    }
+
     // 1. Total Registered Users from public.users
-    const { data: usersData, error: usersErr } = await supabase
-      .from('users')
-      .select('id, status, email');
+    let usersQuery = supabase.from('users').select('id, status, email, created_at');
+    if (startIso && endIso) {
+      usersQuery = usersQuery.gte('created_at', startIso).lte('created_at', endIso);
+    }
+    const { data: usersData, error: usersErr } = await usersQuery;
 
     if (usersErr) {
       console.error('[DEBUG] Dashboard query - users fetch failure:', usersErr);
       throw usersErr;
     }
-    console.log(`[DEBUG] Dashboard query - Users loaded from DB: ${usersData?.length || 0}`);
 
     // Fetch auth users if possible to merge last_sign_in_at and compute actual total users
     let authUsersMap = new Map<string, any>();
@@ -982,6 +995,12 @@ app.get('/api/stats', async (req, res) => {
     const seenEmails = new Set<string>();
 
     authUsersList.forEach((u: any) => {
+      if (startIso && endIso) {
+        const created = u.created_at ? new Date(u.created_at) : null;
+        if (created && (created < new Date(startIso) || created > new Date(endIso))) {
+          return;
+        }
+      }
       seenIds.add(u.id);
       if (u.email) seenEmails.add(u.email.toLowerCase());
     });
@@ -1017,20 +1036,16 @@ app.get('/api/stats', async (req, res) => {
       });
     }
 
-    // 3. Total Ledger Entries
-    const { count: entriesCount, error: entriesErr } = await supabase
-      .from('entries')
-      .select('id', { count: 'exact', head: true });
-
-    if (entriesErr) throw entriesErr;
-
-    // 4. Total Volume / Revenue (sum of all cash-in minus cash-out)
-    const { data: entriesData, error: entDataErr } = await supabase
-      .from('entries')
-      .select('amount, type');
+    // 3. Total Volume & Ledger Entries in Date Range
+    let entriesQuery = supabase.from('entries').select('id, amount, type, created_at');
+    if (startIso && endIso) {
+      entriesQuery = entriesQuery.gte('created_at', startIso).lte('created_at', endIso);
+    }
+    const { data: entriesData, error: entDataErr } = await entriesQuery;
 
     if (entDataErr) throw entDataErr;
 
+    const entriesCount = entriesData?.length || 0;
     let totalVolume = 0;
     if (entriesData) {
       entriesData.forEach((e: any) => {
@@ -1045,16 +1060,17 @@ app.get('/api/stats', async (req, res) => {
     }
 
     // 5. Total files (for dynamic storage size computation)
-    const { count: attCount, error: attCountErr } = await supabase
-      .from('attachments')
-      .select('id', { count: 'exact', head: true });
+    let attQuery = supabase.from('attachments').select('id', { count: 'exact', head: true });
+    let aiAttQuery = supabase.from('ai_attachments').select('id', { count: 'exact', head: true });
+    if (startIso && endIso) {
+      attQuery = attQuery.gte('created_at', startIso).lte('created_at', endIso);
+      aiAttQuery = aiAttQuery.gte('created_at', startIso).lte('created_at', endIso);
+    }
 
+    const { count: attCount, error: attCountErr } = await attQuery;
     if (attCountErr) throw attCountErr;
 
-    const { count: aiAttCount, error: aiAttCountErr } = await supabase
-      .from('ai_attachments')
-      .select('id', { count: 'exact', head: true });
-
+    const { count: aiAttCount, error: aiAttCountErr } = await aiAttQuery;
     if (aiAttCountErr) throw aiAttCountErr;
 
     // Get images table count as well

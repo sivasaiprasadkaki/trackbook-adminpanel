@@ -17,6 +17,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { Cashbook } from '../types';
+import { DateRangeFilter, isDateInRange } from '../utils/dateUtils';
 
 const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(input, { ...init, credentials: 'include' });
 
@@ -30,9 +31,10 @@ interface AppUser {
 interface CashbooksViewProps {
   onAddCashbook?: () => void;
   isSuperAdmin?: boolean;
+  dateRange?: DateRangeFilter;
 }
 
-export default function CashbooksView({ onAddCashbook, isSuperAdmin = true }: CashbooksViewProps) {
+export default function CashbooksView({ onAddCashbook, isSuperAdmin = true, dateRange }: CashbooksViewProps) {
   const [cashbooks, setCashbooks] = useState<Cashbook[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -171,10 +173,13 @@ export default function CashbooksView({ onAddCashbook, isSuperAdmin = true }: Ca
     }
   };
 
-  const filteredCashbooks = cashbooks.filter(cb =>
-    cb.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    cb.manager.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredCashbooks = cashbooks.filter(cb => {
+    const matchesSearch = 
+      cb.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      cb.manager.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesDate = isDateInRange((cb as any).createdDate || (cb as any).createdAt || (cb as any).updatedDate, dateRange);
+    return matchesSearch && matchesDate;
+  });
 
   return (
     <div className="space-y-6">

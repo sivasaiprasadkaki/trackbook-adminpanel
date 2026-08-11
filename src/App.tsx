@@ -13,6 +13,7 @@ import AdminAuth from './components/AdminAuth';
 import SplashScreen from './components/SplashScreen';
 import { Entry } from './types';
 import { RefreshCw } from 'lucide-react';
+import { DateRangeFilter, getPresetDateRange } from './utils/dateUtils';
 
 export default function App() {
   const location = useLocation();
@@ -24,6 +25,7 @@ export default function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchValue, setSearchValue] = useState('');
+  const [dateRange, setDateRange] = useState<DateRangeFilter>(getPresetDateRange('all'));
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showSplash, setShowSplash] = useState<boolean>(() => {
     return sessionStorage.getItem('loginSuccessSplash') === 'true';
@@ -264,18 +266,21 @@ export default function App() {
             entries={entries}
             onAddEntryClick={() => navigate('/entries')}
             onNavigateToTab={(tab) => navigate('/' + tab)}
+            dateRange={dateRange}
+            onResetDateRange={() => setDateRange(getPresetDateRange('all'))}
           />
         );
       case 'users':
-        return <UsersView onRefreshStats={fetchEntries} isSuperAdmin={isSuperAdmin} />;
+        return <UsersView onRefreshStats={fetchEntries} isSuperAdmin={isSuperAdmin} dateRange={dateRange} />;
       case 'cashbooks':
-        return <CashbooksView onAddCashbook={fetchEntries} isSuperAdmin={isSuperAdmin} />;
+        return <CashbooksView onAddCashbook={fetchEntries} isSuperAdmin={isSuperAdmin} dateRange={dateRange} />;
       case 'entries':
         return (
           <EntriesView
             entries={entries}
             onEntryLogged={fetchEntries}
             isSuperAdmin={isSuperAdmin}
+            dateRange={dateRange}
           />
         );
       case 'attachments':
@@ -290,6 +295,8 @@ export default function App() {
             entries={entries}
             onAddEntryClick={() => navigate('/entries')}
             onNavigateToTab={(tab) => navigate('/' + tab)}
+            dateRange={dateRange}
+            onResetDateRange={() => setDateRange(getPresetDateRange('all'))}
           />
         );
     }
@@ -364,6 +371,8 @@ export default function App() {
               ? setSearchValue
               : undefined
           }
+          dateRange={dateRange}
+          onDateRangeChange={setDateRange}
           onRefresh={handleGlobalRefresh}
           isRefreshing={isRefreshing}
           onToggleMobileMenu={() => setIsMobileMenuOpen(prev => !prev)}
