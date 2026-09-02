@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Bell, Calendar, Search, RefreshCw, Menu, BookOpenText, X, Check, Clock, ChevronDown, Filter } from 'lucide-react';
 import { DateRangeFilter, getPresetDateRange, formatDateToInput } from '../utils/dateUtils';
 

@@ -1289,11 +1289,14 @@ app.get('/api/users', async (req, res) => {
           role = u.user_metadata.role;
         }
 
-        // Compute Status
-        let rawStatus = 'Active';
-        if (pubUser) {
+        // Compute Status & Ban Detection
+        const bannedUntil = u.banned_until || null;
+        const isBanned = !!(bannedUntil && new Date(bannedUntil).getTime() > Date.now()) || (pubUser?.status === 'banned');
+
+        let rawStatus = isBanned ? 'Banned' : 'Active';
+        if (pubUser && !isBanned) {
           rawStatus = pubUser.status || 'Active';
-        } else if (profile) {
+        } else if (profile && !isBanned) {
           rawStatus = profile.status || 'Active';
         }
 
@@ -1316,7 +1319,7 @@ app.get('/api/users', async (req, res) => {
           role,
           email,
           phone,
-          status: parsed.status,
+          status: isBanned ? 'Banned' : parsed.status,
           joinedDate: joinedDate
             ? new Date(joinedDate).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
             : '',
@@ -1325,7 +1328,9 @@ app.get('/api/users', async (req, res) => {
             : 'Never',
           avatarUrl,
           lastSeen: parsed.lastSeen || '',
-          isOnline: parsed.isOnline
+          isOnline: isBanned ? false : parsed.isOnline,
+          isBanned,
+          bannedUntil: isBanned ? bannedUntil : null
         });
       });
     }
@@ -1354,7 +1359,8 @@ app.get('/api/users', async (req, res) => {
         if (!name) name = 'Unknown User';
 
         let role = u.is_admin ? 'Admin' : (u.role || 'User');
-        let rawStatus = u.status || 'Active';
+        const isBanned = (u.status || '').toLowerCase() === 'banned';
+        let rawStatus = isBanned ? 'Banned' : (u.status || 'Active');
         const latestEntry = userLatestEntryMap.get(id) || (name ? userLatestEntryMap.get(name.toLowerCase()) : null);
         const parsed = parseUserStatus(rawStatus, null, [id, email, name, emailLower], latestEntry);
 
@@ -1368,14 +1374,16 @@ app.get('/api/users', async (req, res) => {
           role,
           email,
           phone,
-          status: parsed.status,
+          status: isBanned ? 'Banned' : parsed.status,
           joinedDate: joinedDate
             ? new Date(joinedDate).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
             : '',
           lastLogin: 'Never',
           avatarUrl,
           lastSeen: parsed.lastSeen || '',
-          isOnline: parsed.isOnline
+          isOnline: isBanned ? false : parsed.isOnline,
+          isBanned,
+          bannedUntil: isBanned ? (u.banned_until || null) : null
         });
       });
     }
@@ -1956,6 +1964,184 @@ app.delete('/api/users/:id', requireSuperAdmin, async (req, res) => {
   } catch (err: any) {
     console.error('Supabase user delete error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Ban / Block user in Supabase Authentication (Accessible to Admins & Super Admins)
+app.post(['/api/users/:id/ban', '/api/users/:id/block'], async (req: any, res: any) => {
+  const { id } = req.params;
+  const { duration, unit, reason } = req.body;
+  const supabase = getSupabaseAdmin();
+
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase configuration is missing.' });
+  }
+
+  // Prevent regular admin from blocking a Super Admin
+  if (req.adminUser?.role !== 'super_admin') {
+    try {
+      const { data: targetAdmin } = await supabase.from('admin_users').select('role').eq('id', id).maybeSingle();
+      if (targetAdmin?.role === 'super_admin') {
+        return res.status(403).json({ error: 'Forbidden: Regular Admins cannot block a Super Admin.' });
+      }
+    } catch (e: any) {
+      console.warn('Could not verify target admin role:', e.message);
+    }
+  }
+
+  try {
+    let totalHours = 24;
+    let durationLabel = '';
+
+    if (unit === 'permanent') {
+      totalHours = 876000; // 100 years
+      durationLabel = 'Permanent (100 Years)';
+    } else if (unit === 'days') {
+      const d = parseFloat(duration) || 1;
+      totalHours = Math.round(d * 24);
+      durationLabel = `${d} Day${d > 1 ? 's' : ''} (${totalHours}h)`;
+    } else if (unit === 'hours') {
+      const h = parseFloat(duration) || 24;
+      totalHours = Math.round(h);
+      durationLabel = `${totalHours} Hour${totalHours > 1 ? 's' : ''}`;
+    } else {
+      const h = parseFloat(duration) || 24;
+      totalHours = Math.round(h);
+      durationLabel = `${totalHours} Hours`;
+    }
+
+    if (totalHours <= 0) totalHours = 1;
+    const banDurationStr = `${totalHours}h`;
+
+    console.log(`[BAN USER] Banning user ${id} in Supabase Auth for ${banDurationStr}...`);
+
+    let targetEmail = '';
+    let targetName = '';
+    let bannedUntil: string | null = null;
+
+    // 1. Supabase Auth Ban via admin API
+    try {
+      const { data, error } = await supabase.auth.admin.updateUserById(id, {
+        ban_duration: banDurationStr
+      });
+      if (error) {
+        console.error('Supabase auth.admin.updateUserById ban error:', error.message);
+      } else if (data?.user) {
+        targetEmail = data.user.email || '';
+        targetName = data.user.user_metadata?.full_name || '';
+        bannedUntil = data.user.banned_until || null;
+      }
+    } catch (e: any) {
+      console.error('Supabase Auth ban call exception:', e.message);
+    }
+
+    if (!bannedUntil) {
+      bannedUntil = new Date(Date.now() + totalHours * 3600 * 1000).toISOString();
+    }
+
+    // 2. Update status in public.users table as well
+    try {
+      const { data: pubU } = await supabase.from('users').select('name, email').eq('id', id).maybeSingle();
+      if (pubU) {
+        if (!targetEmail) targetEmail = pubU.email || '';
+        if (!targetName) targetName = pubU.name || '';
+      }
+      await supabase
+        .from('users')
+        .update({ status: 'banned' })
+        .eq('id', id);
+    } catch (e: any) {
+      console.warn('Could not update status in users table on ban:', e.message);
+    }
+
+    // 3. Record Audit Log
+    const adminActor = req.adminUser?.full_name || req.adminUser?.username || 'Super Admin';
+    recordAuditLog({
+      user_name: targetName || targetEmail || id,
+      user_role: 'Customer',
+      user_type: 'Admin',
+      action: 'User Blocked / Banned',
+      details: `${targetName || targetEmail || id} was blocked by ${adminActor} for ${durationLabel}. Banned until ${new Date(bannedUntil).toLocaleString()}. Reason: ${reason || 'Admin action'}`,
+      format: 'System'
+    });
+
+    return res.json({
+      success: true,
+      message: `User successfully blocked for ${durationLabel}.`,
+      bannedUntil,
+      isBanned: true
+    });
+  } catch (err: any) {
+    console.error('Ban user error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to ban user' });
+  }
+});
+
+// Unban / Unblock user in Supabase Authentication (Accessible to Admins & Super Admins)
+app.post(['/api/users/:id/unban', '/api/users/:id/unblock'], async (req: any, res: any) => {
+  const { id } = req.params;
+  const supabase = getSupabaseAdmin();
+
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase configuration is missing.' });
+  }
+
+  try {
+    console.log(`[UNBAN USER] Unbanning user ${id} in Supabase Auth...`);
+
+    let targetEmail = '';
+    let targetName = '';
+
+    // 1. Supabase Auth Unban (ban_duration: 'none')
+    try {
+      const { data, error } = await supabase.auth.admin.updateUserById(id, {
+        ban_duration: 'none'
+      });
+      if (error) {
+        console.error('Supabase auth.admin.updateUserById unban error:', error.message);
+      } else if (data?.user) {
+        targetEmail = data.user.email || '';
+        targetName = data.user.user_metadata?.full_name || '';
+      }
+    } catch (e: any) {
+      console.error('Supabase Auth unban call exception:', e.message);
+    }
+
+    // 2. Update status in public.users table to active
+    try {
+      const { data: pubU } = await supabase.from('users').select('name, email').eq('id', id).maybeSingle();
+      if (pubU) {
+        if (!targetEmail) targetEmail = pubU.email || '';
+        if (!targetName) targetName = pubU.name || '';
+      }
+      await supabase
+        .from('users')
+        .update({ status: 'active' })
+        .eq('id', id);
+    } catch (e: any) {
+      console.warn('Could not update status in users table on unban:', e.message);
+    }
+
+    // 3. Record Audit Log
+    const adminActor = req.adminUser?.full_name || req.adminUser?.username || 'Super Admin';
+    recordAuditLog({
+      user_name: targetName || targetEmail || id,
+      user_role: 'Customer',
+      user_type: 'Admin',
+      action: 'User Unblocked / Unbanned',
+      details: `${targetName || targetEmail || id} was unblocked by ${adminActor}. Full access restored.`,
+      format: 'System'
+    });
+
+    return res.json({
+      success: true,
+      message: 'User successfully unblocked. Access restored.',
+      isBanned: false,
+      bannedUntil: null
+    });
+  } catch (err: any) {
+    console.error('Unban user error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to unban user' });
   }
 });
 

@@ -4,12 +4,14 @@ export interface User {
   role: 'Admin' | 'Manager' | 'User';
   email: string;
   phone: string;
-  status: 'Active' | 'Pending' | 'Inactive';
+  status: 'Active' | 'Pending' | 'Inactive' | 'Banned';
   joinedDate: string;
   lastLogin?: string;
   avatarUrl?: string;
   lastSeen?: string;
   isOnline?: boolean;
+  isBanned?: boolean;
+  bannedUntil?: string | null;
 }
 
 export interface Cashbook {

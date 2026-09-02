@@ -21,7 +21,12 @@ import {
   Eye,
   EyeOff,
   RefreshCw,
-  ExternalLink
+  ExternalLink,
+  Ban,
+  ShieldAlert,
+  Clock,
+  AlertTriangle,
+  Unlock
 } from 'lucide-react';
 import { User } from '../types';
 import { DateRangeFilter, isDateInRange } from '../utils/dateUtils';
@@ -55,6 +60,18 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
     status: 'Active' as 'Active' | 'Pending' | 'Inactive'
   });
   const [autoConfirm, setAutoConfirm] = useState<boolean>(true);
+
+  // Ban / Block & Unblock Modal State
+  const [isBanModalOpen, setIsBanModalOpen] = useState(false);
+  const [isUnbanModalOpen, setIsUnbanModalOpen] = useState(false);
+  const [selectedUserForBan, setSelectedUserForBan] = useState<User | null>(null);
+  const [selectedUserForUnban, setSelectedUserForUnban] = useState<User | null>(null);
+  const [banPreset, setBanPreset] = useState<'1h' | '24h' | '3d' | '7d' | '30d' | 'custom' | 'permanent'>('24h');
+  const [banDurationValue, setBanDurationValue] = useState<number>(24);
+  const [banDurationUnit, setBanDurationUnit] = useState<'hours' | 'days'>('hours');
+  const [banReason, setBanReason] = useState('');
+  const [banLoading, setBanLoading] = useState(false);
+  const [unbanLoading, setUnbanLoading] = useState(false);
 
   const [notification, setNotification] = useState<string | null>(null);
 
@@ -444,6 +461,150 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
     }
   };
 
+  // Open Ban Modal
+  const handleOpenBanModal = (user: User) => {
+    setSelectedUserForBan(user);
+    setBanPreset('24h');
+    setBanDurationValue(24);
+    setBanDurationUnit('hours');
+    setBanReason('');
+    setIsBanModalOpen(true);
+  };
+
+  // Submit Ban User in Supabase Auth
+  const handleConfirmBan = async () => {
+    if (!selectedUserForBan) return;
+    setBanLoading(true);
+
+    try {
+      let payload: any = {
+        reason: banReason.trim() || 'Admin manual ban'
+      };
+
+      if (banPreset === 'permanent') {
+        payload.unit = 'permanent';
+      } else if (banPreset === 'custom') {
+        payload.duration = Number(banDurationValue) || 1;
+        payload.unit = banDurationUnit;
+      } else {
+        if (banPreset === '1h') { payload.duration = 1; payload.unit = 'hours'; }
+        else if (banPreset === '24h') { payload.duration = 24; payload.unit = 'hours'; }
+        else if (banPreset === '3d') { payload.duration = 3; payload.unit = 'days'; }
+        else if (banPreset === '7d') { payload.duration = 7; payload.unit = 'days'; }
+        else if (banPreset === '30d') { payload.duration = 30; payload.unit = 'days'; }
+      }
+
+      const res = await fetch(`/api/users/${selectedUserForBan.id}/ban`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        triggerNotification(`User '${selectedUserForBan.name}' blocked successfully in Supabase!`);
+        setIsBanModalOpen(false);
+        setSelectedUserForBan(null);
+        fetchUsers();
+        if (onRefreshStats) onRefreshStats();
+      } else {
+        alert(`Failed to block user: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err: any) {
+      console.error('Error blocking user:', err);
+      alert('Network error while blocking user.');
+    } finally {
+      setBanLoading(false);
+    }
+  };
+
+  // Open Unban Modal
+  const handleOpenUnbanModal = (user: User) => {
+    setSelectedUserForUnban(user);
+    setIsUnbanModalOpen(true);
+  };
+
+  // Submit Unban User in Supabase Auth
+  const handleConfirmUnban = async () => {
+    if (!selectedUserForUnban) return;
+    setUnbanLoading(true);
+
+    try {
+      const res = await fetch(`/api/users/${selectedUserForUnban.id}/unban`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        triggerNotification(`User '${selectedUserForUnban.name}' unblocked successfully. Access restored!`);
+        setIsUnbanModalOpen(false);
+        setSelectedUserForUnban(null);
+        fetchUsers();
+        if (onRefreshStats) onRefreshStats();
+      } else {
+        alert(`Failed to unblock user: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err: any) {
+      console.error('Error unblocking user:', err);
+      alert('Network error while unblocking user.');
+    } finally {
+      setUnbanLoading(false);
+    }
+  };
+
+  // Helper to calculate unban date preview in Modal
+  const calculateBanExpiry = () => {
+    if (banPreset === 'permanent') {
+      return 'Permanently (until manually unblocked)';
+    }
+    const now = new Date();
+    let msToAdd = 0;
+    if (banPreset === '1h') msToAdd = 1 * 60 * 60 * 1000;
+    else if (banPreset === '24h') msToAdd = 24 * 60 * 60 * 1000;
+    else if (banPreset === '3d') msToAdd = 3 * 24 * 60 * 60 * 1000;
+    else if (banPreset === '7d') msToAdd = 7 * 24 * 60 * 60 * 1000;
+    else if (banPreset === '30d') msToAdd = 30 * 24 * 60 * 60 * 1000;
+    else if (banPreset === 'custom') {
+      const val = Number(banDurationValue) || 1;
+      msToAdd = (banDurationUnit === 'days' ? val * 24 : val) * 60 * 60 * 1000;
+    }
+    const expiryDate = new Date(now.getTime() + msToAdd);
+    return expiryDate.toLocaleString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  };
+
+  // Helper to format remaining ban time on user card / table
+  const formatBannedExpiry = (bannedUntil?: string | null) => {
+    if (!bannedUntil) return 'Banned';
+    const expiry = new Date(bannedUntil);
+    const now = new Date();
+    const diffMs = expiry.getTime() - now.getTime();
+    if (diffMs <= 0) return 'Ban expired';
+    
+    const diffHours = Math.round(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffHours > 800000) {
+      return 'Permanent Ban';
+    }
+    if (diffDays >= 2) {
+      return `${diffDays} days left`;
+    }
+    if (diffHours >= 1) {
+      return `${diffHours} hrs left`;
+    }
+    const diffMins = Math.round(diffMs / (1000 * 60));
+    return `${Math.max(1, diffMins)} min left`;
+  };
+
   // Open Edit Modal
   const openEditModal = (user: User) => {
     setSelectedUser(user);
@@ -547,7 +708,10 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
         (user.phone && user.phone.includes(searchQuery));
       
       const matchesRole = roleFilter === 'All' || user.role === roleFilter;
-      const matchesStatus = statusFilter === 'All' || user.status === statusFilter;
+      const matchesStatus = 
+        statusFilter === 'All' || 
+        user.status === statusFilter || 
+        (statusFilter === 'Banned' && (user.isBanned || user.status === 'Banned'));
 
       let matchesTab = true;
       if (activeTab === 'live') {
@@ -927,6 +1091,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                 <option value="Active">Active</option>
                 <option value="Pending">Pending</option>
                 <option value="Inactive">Inactive</option>
+                <option value="Banned">Banned / Blocked</option>
               </select>
               <Filter className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
             </div>
@@ -967,7 +1132,15 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                       </div>
                     </div>
 
-                    {user.isOnline ? (
+                    {user.isBanned ? (
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 shrink-0"
+                        title={user.bannedUntil ? `Banned until: ${new Date(user.bannedUntil).toLocaleString()}` : 'Banned'}
+                      >
+                        <Ban className="w-3 h-3 text-rose-500" />
+                        Banned
+                      </span>
+                    ) : user.isOnline ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
                         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                         Online
@@ -989,6 +1162,15 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                       <p className="flex justify-between">
                         <span className="text-slate-400">Phone:</span>
                         <span className="font-mono text-slate-800">{user.phone}</span>
+                      </p>
+                    )}
+                    {user.isBanned && (
+                      <p className="flex justify-between text-rose-700 font-medium bg-rose-50/80 px-2 py-1 rounded border border-rose-100">
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-rose-500" />
+                          Auth Ban:
+                        </span>
+                        <span className="font-bold text-[11px]">{formatBannedExpiry(user.bannedUntil)}</span>
                       </p>
                     )}
                     <p className="flex justify-between">
@@ -1030,6 +1212,28 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                       <Edit className="w-3.5 h-3.5" />
                       <span>Edit</span>
                     </button>
+                    {/* Block / Unblock is accessible to both Admins and Super Admin */}
+                    {user.isBanned ? (
+                      <button
+                        onClick={() => handleOpenUnbanModal(user)}
+                        title="Unblock user access"
+                        className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                      >
+                        <Unlock className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Unblock</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleOpenBanModal(user)}
+                        title="Block user access"
+                        className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                      >
+                        <Ban className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Block</span>
+                      </button>
+                    )}
+
+                    {/* Delete action remains restricted exclusively to Super Admin */}
                     {isSuperAdmin && (
                       <button
                         onClick={() => handleDelete(user.id)}
@@ -1110,9 +1314,17 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                         <div className="font-mono text-xs text-slate-400 mt-0.5">{user.phone || 'N/A'}</div>
                       </td>
 
-                      {/* Online Status */}
+                      {/* Online Status / Ban Status */}
                       <td className="px-6 py-2">
-                        {user.isOnline ? (
+                        {user.isBanned ? (
+                          <span
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 shadow-xs"
+                            title={user.bannedUntil ? `Banned until: ${new Date(user.bannedUntil).toLocaleString()}` : 'Banned in Supabase Auth'}
+                          >
+                            <Ban className="w-3.5 h-3.5 text-rose-500" />
+                            <span>Banned</span>
+                          </span>
+                        ) : user.isOnline ? (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm animate-fade-in">
                             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
                             Online
@@ -1168,6 +1380,26 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                             <Edit className="w-4 h-4" />
                           </button>
                           
+                          {/* Block / Unblock is accessible to both Admins and Super Admin */}
+                          {user.isBanned ? (
+                            <button
+                              onClick={() => handleOpenUnbanModal(user)}
+                              title="Unblock user access in Supabase"
+                              className="w-8 h-8 rounded-md flex items-center justify-center text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 transition-colors cursor-pointer"
+                            >
+                              <Unlock className="w-4 h-4" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleOpenBanModal(user)}
+                              title="Block / Ban user in Supabase"
+                              className="w-8 h-8 rounded-md flex items-center justify-center text-amber-600 hover:text-amber-700 hover:bg-amber-50 transition-colors cursor-pointer"
+                            >
+                              <Ban className="w-4 h-4" />
+                            </button>
+                          )}
+
+                          {/* Delete action remains restricted exclusively to Super Admin */}
                           {isSuperAdmin && (
                             <button
                               onClick={() => handleDelete(user.id)}
@@ -1632,6 +1864,297 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                   </div>
                 </form>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Supabase-style Ban User Modal */}
+      {isBanModalOpen && selectedUserForBan && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-lg w-full overflow-hidden animate-fade-in">
+            {/* Header */}
+            <div className="p-5 bg-gradient-to-r from-rose-950 via-slate-900 to-slate-900 text-white flex justify-between items-start border-b border-rose-900/30">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0 mt-0.5">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <span>Ban User</span>
+                    <span className="text-[11px] font-mono px-2 py-0.5 bg-rose-900/60 text-rose-300 border border-rose-700/50 rounded-full font-normal">
+                      Supabase Auth
+                    </span>
+                  </h3>
+                  <p className="text-slate-300 text-xs mt-1">
+                    Revoke authentication access and prevent login for this user.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!banLoading) {
+                    setIsBanModalOpen(false);
+                    setSelectedUserForBan(null);
+                  }
+                }}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5 max-h-[85vh] overflow-y-auto">
+              {/* User Card */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-3">
+                {selectedUserForBan.avatarUrl ? (
+                  <img src={selectedUserForBan.avatarUrl} alt={selectedUserForBan.name} className="w-10 h-10 rounded-full object-cover border border-slate-200" />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-slate-200 text-slate-700 font-bold flex items-center justify-center text-sm">
+                    {selectedUserForBan.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-sm text-slate-900 truncate">{selectedUserForBan.name}</h4>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-200 text-slate-700">
+                      {selectedUserForBan.role}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 truncate mt-0.5">{selectedUserForBan.email}</p>
+                </div>
+              </div>
+
+              {/* Warning Callout */}
+              <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl text-amber-900 text-xs flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p className="leading-relaxed">
+                  When banned, all active user sessions will be terminated and Supabase Authentication will block this user from logging in until the specified duration expires.
+                </p>
+              </div>
+
+              {/* Ban Duration Selection */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-2">
+                  Ban Duration
+                </label>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mb-3">
+                  {[
+                    { id: '1h', label: '1 Hour' },
+                    { id: '24h', label: '24 Hours (1 Day)' },
+                    { id: '3d', label: '3 Days' },
+                    { id: '7d', label: '7 Days' },
+                    { id: '30d', label: '30 Days' },
+                    { id: 'custom', label: 'Custom' },
+                    { id: 'permanent', label: 'Permanent' }
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setBanPreset(p.id as any)}
+                      className={`py-2 px-2 text-xs font-semibold rounded-lg border text-center transition-all cursor-pointer ${
+                        banPreset === p.id
+                          ? 'bg-rose-50 border-rose-500 text-rose-700 ring-2 ring-rose-500/20 shadow-xs'
+                          : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom Duration Fields */}
+                {banPreset === 'custom' && (
+                  <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2 animate-fade-in">
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      Enter Custom Time Duration
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        max="10000"
+                        value={banDurationValue}
+                        onChange={(e) => setBanDurationValue(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="flex-1 h-10 px-3 border border-slate-200 rounded-lg text-sm font-semibold text-slate-800 bg-white focus:outline-none focus:border-rose-500"
+                        placeholder="e.g. 12"
+                      />
+                      <select
+                        value={banDurationUnit}
+                        onChange={(e) => setBanDurationUnit(e.target.value as any)}
+                        className="h-10 px-3 bg-white border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 focus:outline-none focus:border-rose-500 cursor-pointer"
+                      >
+                        <option value="hours">Hours</option>
+                        <option value="days">Days</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Dynamic Expiration Banner */}
+              <div className="p-3.5 bg-rose-50/70 border border-rose-200/80 rounded-xl flex items-center gap-3">
+                <Clock className="w-5 h-5 text-rose-600 shrink-0" />
+                <div className="text-xs">
+                  <span className="text-slate-500 block font-medium">Automatic Unban At:</span>
+                  <span className="text-rose-900 font-bold text-sm block mt-0.5">
+                    {calculateBanExpiry()}
+                  </span>
+                </div>
+              </div>
+
+              {/* Reason Note */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                  Reason for Ban (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={banReason}
+                  onChange={(e) => setBanReason(e.target.value)}
+                  placeholder="e.g. Repeated policy violation, Suspicious transaction activity"
+                  className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-rose-500"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={banLoading}
+                  onClick={() => {
+                    setIsBanModalOpen(false);
+                    setSelectedUserForBan(null);
+                  }}
+                  className="flex-1 h-11 border border-slate-200 hover:bg-slate-50 rounded-xl text-sm font-semibold text-slate-700 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={banLoading}
+                  onClick={handleConfirmBan}
+                  className="flex-1 h-11 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-sm font-bold transition-all shadow-md active:scale-98 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  {banLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Banning in Supabase...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Ban className="w-4 h-4" />
+                      <span>Confirm Ban User</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Supabase-style Unblock User Modal */}
+      {isUnbanModalOpen && selectedUserForUnban && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden animate-fade-in">
+            {/* Header */}
+            <div className="p-5 bg-gradient-to-r from-emerald-950 via-slate-900 to-slate-900 text-white flex justify-between items-start border-b border-emerald-900/30">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
+                  <Unlock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <span>Unblock User</span>
+                    <span className="text-[11px] font-mono px-2 py-0.5 bg-emerald-900/60 text-emerald-300 border border-emerald-700/50 rounded-full font-normal">
+                      Supabase Auth
+                    </span>
+                  </h3>
+                  <p className="text-slate-300 text-xs mt-1">
+                    Restore full platform access in Supabase Authentication.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!unbanLoading) {
+                    setIsUnbanModalOpen(false);
+                    setSelectedUserForUnban(null);
+                  }
+                }}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-3">
+                {selectedUserForUnban.avatarUrl ? (
+                  <img src={selectedUserForUnban.avatarUrl} alt={selectedUserForUnban.name} className="w-10 h-10 rounded-full object-cover border border-slate-200" />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-slate-200 text-slate-700 font-bold flex items-center justify-center text-sm">
+                    {selectedUserForUnban.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-bold text-sm text-slate-900 truncate">{selectedUserForUnban.name}</h4>
+                  <p className="text-xs text-slate-500 truncate mt-0.5">{selectedUserForUnban.email}</p>
+                </div>
+              </div>
+
+              <p className="text-sm text-slate-600 leading-relaxed">
+                Are you sure you want to unblock <strong>{selectedUserForUnban.name}</strong>?
+              </p>
+
+              {selectedUserForUnban.bannedUntil && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900">
+                  Current ban was set to expire on:{' '}
+                  <strong className="block mt-0.5 text-amber-950 font-mono">
+                    {new Date(selectedUserForUnban.bannedUntil).toLocaleString()}
+                  </strong>
+                </div>
+              )}
+
+              <p className="text-xs text-slate-500">
+                Unblocking will clear the ban duration in Supabase Authentication and restore immediate login access for this user.
+              </p>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={unbanLoading}
+                  onClick={() => {
+                    setIsUnbanModalOpen(false);
+                    setSelectedUserForUnban(null);
+                  }}
+                  className="flex-1 h-11 border border-slate-200 hover:bg-slate-50 rounded-xl text-sm font-semibold text-slate-700 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={unbanLoading}
+                  onClick={handleConfirmUnban}
+                  className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition-all shadow-md active:scale-98 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  {unbanLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Unblocking...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Unlock className="w-4 h-4" />
+                      <span>Unblock User</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
