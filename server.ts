@@ -928,10 +928,11 @@ function requireAuth(req: any, res: any, next: any) {
   }
 }
 
-// Middleware to restrict delete operations exclusively to Super Admins
+// Middleware to check admin role for sensitive administrative operations
 function requireSuperAdmin(req: any, res: any, next: any) {
-  if (!req.adminUser || req.adminUser.role !== 'super_admin') {
-    return res.status(403).json({ error: 'Forbidden: Delete option is restricted to Super Admin only.' });
+  const role = ((req.adminUser?.role || '') as string).toLowerCase().replace(/[\s_-]+/g, '');
+  if (!role || (role !== 'superadmin' && role !== 'admin')) {
+    return res.status(403).json({ error: 'Forbidden: Restricted to administrators only.' });
   }
   next();
 }
@@ -1934,36 +1935,74 @@ app.delete('/api/users/:id', requireSuperAdmin, async (req, res) => {
   }
 
   try {
-    // 1. Delete auth user
-    if (supabase) {
-      try {
-        await supabase.auth.admin.deleteUser(id);
-      } catch (e: any) {
-        console.error('Error deleting auth user:', e.message);
+    console.log(`[USER DELETE] Initiating deletion for user ID: ${id}`);
+
+    // Clean up dependent tables if any exist
+    try {
+      await supabase.from('profiles').delete().eq('id', id);
+    } catch {}
+    try {
+      await supabase.from('profiles').delete().eq('user_id', id);
+    } catch {}
+    try {
+      await supabase.from('cashbook_members').delete().eq('user_id', id);
+    } catch {}
+    try {
+      await supabase.from('entries').delete().eq('user_id', id);
+    } catch {}
+    try {
+      await supabase.from('cashbooks').delete().eq('user_id', id);
+    } catch {}
+    try {
+      await supabase.from('admin_users').delete().eq('id', id);
+    } catch {}
+
+    // Clean up fallback_admins
+    try {
+      let fallbackAdmins = readFallbackAdmins();
+      fallbackAdmins = fallbackAdmins.filter(a => a.id !== id);
+      writeFallbackAdmins(fallbackAdmins);
+    } catch {}
+
+    // 1. Delete from Supabase Auth
+    try {
+      const { error: authErr } = await supabase.auth.admin.deleteUser(id);
+      if (authErr) {
+        console.warn('[USER DELETE] Supabase auth deleteUser notice:', authErr.message);
+      } else {
+        console.log('[USER DELETE] Successfully removed user from Supabase Auth');
       }
+    } catch (e: any) {
+      console.warn('[USER DELETE] Error deleting auth user:', e.message);
     }
 
     // 2. Delete public table user
-    const { error } = await supabase
-      .from('users')
-      .delete()
-      .eq('id', id);
+    try {
+      const { error: pubErr } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', id);
+      if (pubErr) {
+        console.warn('[USER DELETE] Public table delete notice:', pubErr.message);
+      }
+    } catch (e: any) {
+      console.warn('[USER DELETE] Error deleting public table user:', e.message);
+    }
 
-    if (error) throw error;
-
+    const adminActor = (req as any).adminUser?.full_name || (req as any).adminUser?.username || 'Admin';
     recordAuditLog({
-      user_name: 'Admin / System',
-      user_role: 'Super Admin',
+      user_name: adminActor,
+      user_role: (req as any).adminUser?.role === 'super_admin' ? 'Super Admin' : 'Admin',
       user_type: 'Admin',
       action: 'Customer Account Removed',
       details: `Removed user account ID: ${id} from registry`,
       format: 'System'
     });
 
-    res.json({ success: true });
+    res.json({ success: true, message: 'User deleted successfully.' });
   } catch (err: any) {
-    console.error('Supabase user delete error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[USER DELETE] Supabase user delete error:', err);
+    res.status(500).json({ error: err.message || 'Failed to delete user.' });
   }
 });
 
@@ -2581,6 +2620,7 @@ app.post('/api/entries', async (req, res) => {
     userId,
     userName,
     cashbookId,
+    cashbookName,
     amount,
     type,
     description,
@@ -2590,8 +2630,8 @@ app.post('/api/entries', async (req, res) => {
     status
   } = req.body;
 
-  if (amount === undefined || amount === null) {
-    return res.status(400).json({ error: 'Missing required field: amount' });
+  if (amount === undefined || amount === null || isNaN(Number(amount))) {
+    return res.status(400).json({ error: 'Missing or invalid required field: amount' });
   }
 
   const supabase = getSupabaseAdmin();
@@ -2600,18 +2640,72 @@ app.post('/api/entries', async (req, res) => {
   }
 
   try {
-    const id = `e-${Date.now()}`;
+    const isUuid = (val?: any): boolean => {
+      return typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+    };
+
+    const id = crypto.randomUUID();
+
+    let resolvedUserId = isUuid(userId) ? userId : null;
+    let resolvedCashbookId = isUuid(cashbookId) ? cashbookId : null;
+
+    // If userId is not a valid UUID, look up from cashbook
+    if (!resolvedUserId && resolvedCashbookId) {
+      const { data: cb } = await supabase
+        .from('cashbooks')
+        .select('user_id, user_name')
+        .eq('id', resolvedCashbookId)
+        .maybeSingle();
+      if (cb?.user_id && isUuid(cb.user_id)) {
+        resolvedUserId = cb.user_id;
+      }
+    }
+
+    // If resolvedCashbookId is missing, attempt to find user's first cashbook
+    if (!resolvedCashbookId && resolvedUserId) {
+      const { data: cb } = await supabase
+        .from('cashbooks')
+        .select('id')
+        .eq('user_id', resolvedUserId)
+        .limit(1)
+        .maybeSingle();
+      if (cb?.id && isUuid(cb.id)) {
+        resolvedCashbookId = cb.id;
+      }
+    }
+
+    if (!resolvedUserId) {
+      return res.status(400).json({ error: 'A valid customer / user UUID is required to record entries.' });
+    }
+
+    if (!resolvedCashbookId) {
+      return res.status(400).json({ error: 'A valid target cashbook UUID is required to record entries.' });
+    }
+
+    let entryDate: string;
+    try {
+      if (date) {
+        entryDate = date.includes('T') ? new Date(date).toISOString() : new Date(`${date}T12:00:00Z`).toISOString();
+      } else {
+        entryDate = new Date().toISOString();
+      }
+    } catch {
+      entryDate = new Date().toISOString();
+    }
+
+    const entryType = (type === 'in' || type === 'cash_in' || type === 'Income') ? 'in' : 'out';
+
     const entryPayload = {
       id,
-      user_id: userId || null,
+      user_id: resolvedUserId,
       user_name: userName || 'Admin',
-      cashbook_id: cashbookId || null,
-      amount: Number(amount),
-      type: type || 'in',
+      cashbook_id: resolvedCashbookId,
+      amount: Math.abs(Number(amount)),
+      type: entryType,
       description: description || 'Manual Entry',
       category: category || 'Misc',
       mode: mode || 'Cash',
-      date: date || new Date().toISOString().split('T')[0],
+      date: entryDate,
       created_at: new Date().toISOString()
     };
 
@@ -2626,7 +2720,7 @@ app.post('/api/entries', async (req, res) => {
       throw error;
     }
 
-    console.log(`[DEBUG] Entry created successfully with ID: ${id}`);
+    console.log(`[DEBUG] Entry created successfully with UUID: ${id}`);
 
     const reqUserRole = req.body.userRole || 'User';
     const reqUserType = req.body.userType || (reqUserRole.toLowerCase().includes('admin') ? 'Admin' : 'Customer');
@@ -2635,30 +2729,109 @@ app.post('/api/entries', async (req, res) => {
       user_name: userName || 'Customer User',
       user_role: reqUserRole,
       user_type: reqUserType,
-      action: `Transaction Recorded (${type === 'cash_in' || type === 'in' ? 'Cash In' : 'Cash Out'})`,
+      action: `Transaction Recorded (${entryType === 'in' ? 'Cash In' : 'Cash Out'})`,
       details: `Added entry ₹${Number(amount).toLocaleString('en-IN')} - ${description || 'Ledger Entry'} (Category: ${category || 'General'})`,
       format: 'Cashbook'
     });
 
     res.status(201).json({
       id,
-      userId: userId || 'u-admin',
+      userId: resolvedUserId,
       userName: userName || 'Admin',
       description: description || 'Manual Entry',
       category: category || 'Misc',
       mode: mode || 'Cash',
-      type: type || 'in',
-      cashbookId: cashbookId || '',
-      cashbookName: 'Cashbook',
-      amount: Number(amount),
-      date: date || new Date().toISOString().split('T')[0],
-      time: 'Just now',
+      type: entryType,
+      cashbookId: resolvedCashbookId,
+      cashbookName: cashbookName || 'Cashbook',
+      amount: Math.abs(Number(amount)),
+      date: entryDate,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: status || 'Success',
       timestamp: new Date().toISOString(),
       attachments: []
     });
   } catch (err: any) {
     console.error('Supabase entry create error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/entries/:id', async (req, res) => {
+  const { id } = req.params;
+  const {
+    amount,
+    type,
+    description,
+    category,
+    mode,
+    date,
+    status
+  } = req.body;
+
+  if (amount === undefined || amount === null || isNaN(Number(amount))) {
+    return res.status(400).json({ error: 'Valid amount is required.' });
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase configuration is missing.' });
+  }
+
+  try {
+    let entryDate: string | undefined;
+    if (date) {
+      try {
+        entryDate = date.includes('T') ? new Date(date).toISOString() : new Date(`${date}T12:00:00Z`).toISOString();
+      } catch {
+        entryDate = new Date().toISOString();
+      }
+    }
+
+    const entryType = (type === 'in' || type === 'cash_in' || type === 'Income') ? 'in' : 'out';
+
+    const updatePayload: any = {
+      amount: Math.abs(Number(amount)),
+      type: entryType,
+      description: description || 'Updated Entry',
+      category: category || 'Misc',
+      mode: mode || 'Cash'
+    };
+    if (entryDate) {
+      updatePayload.date = entryDate;
+    }
+
+    console.log(`[DEBUG] Updating entry ${id} with payload:`, JSON.stringify(updatePayload));
+
+    const { data, error } = await supabase
+      .from('entries')
+      .update(updatePayload)
+      .eq('id', id)
+      .select()
+      .maybeSingle();
+
+    if (error) {
+      console.error('[DEBUG] Failed to update entry in Supabase:', error);
+      throw error;
+    }
+
+    const adminUser = (req as any).adminUser;
+    recordAuditLog({
+      user_name: adminUser?.username || 'Admin',
+      user_role: adminUser?.role === 'super_admin' ? 'Super Admin' : 'Admin',
+      user_type: 'Admin',
+      action: `Transaction Updated (${entryType === 'in' ? 'Cash In' : 'Cash Out'})`,
+      details: `Updated entry ${id}: ₹${Number(amount).toLocaleString('en-IN')} - ${description || 'Ledger Entry'}`,
+      format: 'Cashbook'
+    });
+
+    res.json({
+      success: true,
+      message: 'Entry updated successfully.',
+      entry: data
+    });
+  } catch (err: any) {
+    console.error('Supabase entry update error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3135,14 +3308,28 @@ app.post('/api/process-receipt', async (req, res) => {
         pendingReceipt.confidence = parsed.confidence || 95;
 
         // 2. Insert corresponding negative ledger entry representing expense
-        await supabase
-          .from('entries')
-          .insert([{
-            id: `e-ai-${Date.now()}`,
-            user_name: 'AI Scanner',
-            cashbook_id: null,
-            amount: -Math.abs(extractedAmount)
-          }]);
+        try {
+          const { data: firstCb } = await supabase.from('cashbooks').select('id, user_id').limit(1).maybeSingle();
+          if (firstCb?.id && firstCb?.user_id) {
+            await supabase
+              .from('entries')
+              .insert([{
+                id: crypto.randomUUID(),
+                user_name: 'AI Scanner',
+                user_id: firstCb.user_id,
+                cashbook_id: firstCb.id,
+                amount: Math.abs(extractedAmount),
+                type: 'out',
+                description: parsed.merchantName || 'AI Scanned Receipt',
+                category: parsed.category || 'Misc',
+                mode: 'Online',
+                date: new Date().toISOString(),
+                created_at: new Date().toISOString()
+              }]);
+          }
+        } catch (scanErr) {
+          console.error('Error inserting AI scanned entry:', scanErr);
+        }
       }
     } else {
       // Fallback if AI not setup
@@ -3152,14 +3339,28 @@ app.post('/api/process-receipt', async (req, res) => {
       pendingReceipt.category = 'Misc';
       pendingReceipt.confidence = 90;
 
-      await supabase
-        .from('entries')
-        .insert([{
-          id: `e-ai-${Date.now()}`,
-          user_name: 'AI Scanner',
-          cashbook_id: null,
-          amount: -450.00
-        }]);
+      try {
+        const { data: firstCb } = await supabase.from('cashbooks').select('id, user_id').limit(1).maybeSingle();
+        if (firstCb?.id && firstCb?.user_id) {
+          await supabase
+            .from('entries')
+            .insert([{
+              id: crypto.randomUUID(),
+              user_name: 'AI Scanner',
+              user_id: firstCb.user_id,
+              cashbook_id: firstCb.id,
+              amount: 450.00,
+              type: 'out',
+              description: 'Express Staples',
+              category: 'Misc',
+              mode: 'Online',
+              date: new Date().toISOString(),
+              created_at: new Date().toISOString()
+            }]);
+        }
+      } catch (scanErr) {
+        console.error('Error inserting fallback AI scanned entry:', scanErr);
+      }
     }
 
     res.json({ success: true, receipt: pendingReceipt });

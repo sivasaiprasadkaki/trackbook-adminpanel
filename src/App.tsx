@@ -255,7 +255,7 @@ export default function App() {
     'settings': 'System Settings'
   };
 
-  const isSuperAdmin = currentUser?.role === 'super_admin';
+  const isSuperAdmin = !!currentUser && ((currentUser.role || '').toLowerCase().includes('admin'));
 
   // Render the appropriate panel view
   const renderTabContent = () => {

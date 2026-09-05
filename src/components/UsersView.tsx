@@ -97,6 +97,11 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
     phone: string;
   } | null>(null);
 
+  // Delete modal state (replaces iframe-blocked window.confirm)
+  const [userToDelete, setUserToDelete] = useState<{ id: string; name: string; email?: string } | null>(null);
+  const [adminToDelete, setAdminToDelete] = useState<{ id: string; username: string } | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+
   const generateRandomPassword = () => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
     let rand = '';
@@ -201,24 +206,31 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
     setIsRoleModalOpen(true);
   };
 
-  const handleDeleteAdminUser = async (adminId: string, username: string) => {
-    if (!window.confirm(`Are you sure you want to revoke admin access for '${username}'?`)) {
-      return;
-    }
+  const handleDeleteAdminUser = (adminId: string, username: string) => {
+    setAdminToDelete({ id: adminId, username });
+  };
+
+  const confirmDeleteAdmin = async () => {
+    if (!adminToDelete) return;
+    setIsDeletingUser(true);
     try {
-      const res = await fetch(`/api/admin/users/${adminId}`, {
+      const res = await fetch(`/api/admin/users/${adminToDelete.id}`, {
         method: 'DELETE'
       });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        triggerNotification(`Admin user '${username}' access removed successfully.`);
+        triggerNotification(`Admin user '${adminToDelete.username}' access revoked.`);
+        setAdminToDelete(null);
         fetchAdminUsers();
         fetchUsers();
       } else {
-        const errData = await res.json();
-        alert(errData.error || 'Failed to delete admin.');
+        triggerNotification(data.error || 'Failed to revoke admin access.');
       }
     } catch (err: any) {
-      alert(err.message || 'Failed to delete admin.');
+      console.error('Error deleting admin:', err);
+      triggerNotification('Network error while revoking admin access.');
+    } finally {
+      setIsDeletingUser(false);
     }
   };
 
@@ -301,7 +313,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
       ? window.location.origin 
       : 'https://admin.trackbook.xyz';
 
-    const msg = `Hello *${createdCredentials.fullName}*,\n\nYou have been granted *${roleTitle}* access in *TripTraccker Admin Portal*.\n\n🔑 *Login Credentials:*\n• *Username:* \`${createdCredentials.username}\`\n• *Password:* \`${createdCredentials.password}\`\n• *Role:* ${roleTitle}\n\n🌐 *Portal URL:*\n${portalUrl}\n\nPlease login with these credentials.`;
+    const msg = `Hello *${createdCredentials.fullName}*,\n\nYou have been granted *${roleTitle}* access in *TrackBook Admin Portal*.\n\n🔑 *Login Credentials:*\n• *Username:* \`${createdCredentials.username}\`\n• *Password:* \`${createdCredentials.password}\`\n• *Role:* ${roleTitle}\n\n🌐 *Portal URL:*\n${portalUrl}\n\nPlease login with these credentials.`;
 
     const cleanPhone = createdCredentials.phone ? createdCredentials.phone.replace(/[^0-9]/g, '') : '';
     const waUrl = cleanPhone && cleanPhone.length >= 8
@@ -318,7 +330,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
       ? window.location.origin 
       : 'https://admin.trackbook.xyz';
 
-    const text = `TripTraccker Credentials:\nName: ${createdCredentials.fullName}\nRole: ${roleTitle}\nUsername: ${createdCredentials.username}\nPassword: ${createdCredentials.password}\nPortal URL: ${portalUrl}`;
+    const text = `TrackBook Credentials:\nName: ${createdCredentials.fullName}\nRole: ${roleTitle}\nUsername: ${createdCredentials.username}\nPassword: ${createdCredentials.password}\nPortal URL: ${portalUrl}`;
     navigator.clipboard.writeText(text);
     triggerNotification('Credentials copied to clipboard!');
   };
@@ -446,18 +458,34 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
   };
 
   // Delete User
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this user?')) return;
+  const handleDelete = (id: string, name?: string, email?: string) => {
+    const u = users.find(x => x.id === id);
+    setUserToDelete({
+      id,
+      name: name || u?.name || 'this user',
+      email: email || u?.email || ''
+    });
+  };
 
+  const confirmDeleteUser = async () => {
+    if (!userToDelete) return;
+    setIsDeletingUser(true);
     try {
-      const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/users/${userToDelete.id}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        triggerNotification('User deleted from registry.');
+        triggerNotification(`User '${userToDelete.name}' deleted from registry.`);
+        setUserToDelete(null);
         fetchUsers();
         if (onRefreshStats) onRefreshStats();
+      } else {
+        triggerNotification(data.error || 'Failed to delete user.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error deleting user:', err);
+      triggerNotification('Network error while deleting user.');
+    } finally {
+      setIsDeletingUser(false);
     }
   };
 
@@ -1233,10 +1261,10 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                       </button>
                     )}
 
-                    {/* Delete action remains restricted exclusively to Super Admin */}
+                    {/* Delete action */}
                     {isSuperAdmin && (
                       <button
-                        onClick={() => handleDelete(user.id)}
+                        onClick={() => handleDelete(user.id, user.name, user.email)}
                         className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -1399,10 +1427,10 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                             </button>
                           )}
 
-                          {/* Delete action remains restricted exclusively to Super Admin */}
+                          {/* Delete action */}
                           {isSuperAdmin && (
                             <button
-                              onClick={() => handleDelete(user.id)}
+                              onClick={() => handleDelete(user.id, user.name, user.email)}
                               title="Delete user from system"
                               className="w-8 h-8 rounded-md flex items-center justify-center text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
                             >
@@ -2151,6 +2179,139 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                     <>
                       <Unlock className="w-4 h-4" />
                       <span>Unblock User</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* User Deletion Confirmation Modal */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-rose-600 text-white px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
+                  <Trash2 className="w-4 h-4 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base leading-tight">Delete User Account</h3>
+                  <p className="text-[11px] text-rose-100">Permanent registry deletion</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUserToDelete(null)}
+                disabled={isDeletingUser}
+                className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-slate-600 leading-relaxed">
+                Are you sure you want to permanently delete user <strong className="text-slate-900">{userToDelete.name}</strong>
+                {userToDelete.email ? <span className="text-slate-500"> ({userToDelete.email})</span> : ''}?
+              </p>
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>This will remove their profile and authentication credentials from the registry. This action cannot be undone.</span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setUserToDelete(null)}
+                  disabled={isDeletingUser}
+                  className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteUser}
+                  disabled={isDeletingUser}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 shadow-md transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isDeletingUser ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Confirm Delete</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Revoke Confirmation Modal */}
+      {adminToDelete && (
+        <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-rose-600 text-white px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
+                  <Trash2 className="w-4 h-4 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base leading-tight">Revoke Admin Access</h3>
+                  <p className="text-[11px] text-rose-100">Remove administrator privileges</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdminToDelete(null)}
+                disabled={isDeletingUser}
+                className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-slate-600 leading-relaxed">
+                Are you sure you want to revoke admin portal access for <strong className="text-slate-900">{adminToDelete.username}</strong>?
+              </p>
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>This user will no longer be able to log in to the TrackBook Admin Portal.</span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setAdminToDelete(null)}
+                  disabled={isDeletingUser}
+                  className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteAdmin}
+                  disabled={isDeletingUser}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 shadow-md transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isDeletingUser ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Revoking...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Revoke Access</span>
                     </>
                   )}
                 </button>

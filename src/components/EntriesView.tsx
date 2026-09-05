@@ -22,7 +22,8 @@ import {
   ArrowUpRight,
   Clock,
   UserCheck,
-  ChevronDown
+  ChevronDown,
+  Edit3
 } from 'lucide-react';
 import { Entry, Cashbook, User as AppUser } from '../types';
 import { DateRangeFilter, isDateInRange } from '../utils/dateUtils';
@@ -76,6 +77,20 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRa
     type: 'out' as 'in' | 'out',
     date: new Date().toISOString().split('T')[0],
     status: 'Success' as 'Success' | 'Processing' | 'Warning'
+  });
+
+  // State for Editing Record
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [editFormData, setEditFormData] = useState({
+    id: '',
+    description: '',
+    category: 'Misc',
+    mode: 'Cash',
+    amount: '',
+    type: 'out' as 'in' | 'out',
+    date: new Date().toISOString().split('T')[0],
+    status: 'Success'
   });
 
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -190,6 +205,7 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRa
           userRole: selectedUser.role || 'User',
           userType: selectedUser.role?.toLowerCase().includes('admin') ? 'Admin' : 'Customer',
           cashbookId: selectedCashbook.id,
+          cashbookName: selectedCashbook.name,
           amount: parseFloat(formData.amount),
           type: formData.type,
           description: formData.description,
@@ -262,6 +278,73 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRa
     }
   };
 
+  const handleOpenEdit = (entry: any) => {
+    let dateFormatted = new Date().toISOString().split('T')[0];
+    if (entry.date) {
+      try {
+        const d = new Date(entry.date);
+        if (!isNaN(d.getTime())) {
+          dateFormatted = d.toISOString().split('T')[0];
+        }
+      } catch {}
+    }
+
+    setEditFormData({
+      id: entry.id,
+      amount: String(entry.amount ?? ''),
+      type: (entry.type === 'in' || entry.type === 'cash_in' || entry.type === 'Income') ? 'in' : 'out',
+      description: entry.description || '',
+      category: entry.category || 'Misc',
+      mode: entry.mode || 'Cash',
+      date: dateFormatted,
+      status: entry.status || 'Success'
+    });
+    setIsEditModalOpen(true);
+  };
+
+  const handleUpdateEntry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editFormData.id) return;
+    if (!editFormData.description || !editFormData.amount) {
+      showNotification('Please fill in all required fields.', 'error');
+      return;
+    }
+
+    try {
+      setIsUpdating(true);
+      const res = await fetch(`/api/entries/${editFormData.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: parseFloat(editFormData.amount),
+          type: editFormData.type,
+          description: editFormData.description,
+          category: editFormData.category,
+          mode: editFormData.mode,
+          date: editFormData.date,
+          status: editFormData.status
+        })
+      });
+
+      if (res.ok) {
+        showNotification('Transaction updated successfully!');
+        setIsEditModalOpen(false);
+        if (selectedCashbook) {
+          fetchEntriesForCashbook(selectedCashbook.id);
+        }
+        onEntryLogged();
+      } else {
+        const errData = await res.json();
+        showNotification(errData.error || 'Failed to update entry.', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showNotification('Server communication failure during update.', 'error');
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   // Filter users by typing search query
   const filteredUsers = users.filter(u =>
     u.name.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
@@ -270,8 +353,33 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRa
 
   // Filter cashbooks for selected user
   const userCashbooks = selectedUser
-    ? cashbooks.filter((c: any) => c.userId === selectedUser.id)
+    ? cashbooks.filter((c: any) => 
+        c.userId === selectedUser.id || 
+        c.user_id === selectedUser.id || 
+        (c.ownerEmail && selectedUser.email && c.ownerEmail.toLowerCase() === selectedUser.email.toLowerCase())
+      )
     : [];
+
+  // Helper to format display date gracefully
+  const formatDisplayDate = (dStr: string) => {
+    if (!dStr) return 'N/A';
+    try {
+      const d = new Date(dStr);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      }
+    } catch {}
+    return dStr;
+  };
+
+  // Auto-select first cashbook if user is selected but no cashbook or cashbook not in user's list
+  useEffect(() => {
+    if (selectedUser && userCashbooks.length > 0) {
+      if (!selectedCashbook || !userCashbooks.some((c: any) => c.id === selectedCashbook.id)) {
+        setSelectedCashbook(userCashbooks[0]);
+      }
+    }
+  }, [selectedUser, cashbooks]);
 
   // Calculate dynamic running balances (chronological order)
   const chronologicalEntries = [...entries].reverse();
@@ -854,7 +962,7 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRa
                           <span>{e.category}</span>
                         </span>
                         <span className="text-[11px] font-mono text-slate-400 font-medium">
-                          {e.date} {e.time}
+                          {formatDisplayDate(e.date)} • {e.time}
                         </span>
                       </div>
 
@@ -898,6 +1006,14 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRa
                               Attachment
                             </button>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEdit(e)}
+                            className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer"
+                            title="Edit Entry"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
                           {isSuperAdmin && (
                             <button
                               onClick={() => handleDeleteEntry(e.id)}
@@ -943,7 +1059,7 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRa
                         <tr key={e.id} className="hover:bg-slate-50/60 transition-colors">
                           {/* Date */}
                           <td className="py-3.5 px-4 font-mono font-medium text-slate-500 whitespace-nowrap">
-                            {e.date || 'N/A'}
+                            {formatDisplayDate(e.date)}
                           </td>
 
                           {/* Merchant / Details */}
@@ -1035,16 +1151,27 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRa
                           </td>
 
                           {/* Actions */}
-                          <td className="py-3.5 px-4 text-center">
-                            {isSuperAdmin && (
+                          <td className="py-3.5 px-4 text-center whitespace-nowrap">
+                            <div className="inline-flex items-center gap-1">
                               <button
-                                onClick={() => handleDeleteEntry(e.id)}
-                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-all cursor-pointer inline-flex items-center justify-center"
-                                title="Delete Transaction"
+                                type="button"
+                                onClick={() => handleOpenEdit(e)}
+                                className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-all cursor-pointer inline-flex items-center justify-center"
+                                title="Edit Transaction"
                               >
-                                <Trash2 className="w-4 h-4" />
+                                <Edit3 className="w-4 h-4" />
                               </button>
-                            )}
+                              {isSuperAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteEntry(e.id)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-all cursor-pointer inline-flex items-center justify-center"
+                                  title="Delete Transaction"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
                           </td>
 
                         </tr>
@@ -1083,7 +1210,7 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRa
                       </span>
 
                       <span className="text-[11px] font-mono text-slate-400 font-medium">
-                        {e.date}
+                        {formatDisplayDate(e.date)}
                       </span>
                     </div>
 
@@ -1178,8 +1305,18 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRa
                           {e.mode}
                         </span>
 
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEdit(e)}
+                          className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-all cursor-pointer"
+                          title="Edit"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+
                         {isSuperAdmin && (
                           <button
+                            type="button"
                             onClick={() => handleDeleteEntry(e.id)}
                             className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-all cursor-pointer"
                             title="Delete"
@@ -1278,6 +1415,181 @@ export default function EntriesView({ onEntryLogged, isSuperAdmin = true, dateRa
                 Download Attachment
               </a>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Ledger Transaction Modal */}
+      {isEditModalOpen && (
+        <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center border border-blue-400/30">
+                  <Edit3 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base leading-tight">Edit Ledger Transaction</h3>
+                  <p className="text-[11px] text-slate-400 font-mono">Update cashbook entry details</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditModalOpen(false)}
+                className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleUpdateEntry} className="p-6 space-y-4">
+              {/* Type selector (Cash In vs Cash Out) */}
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                  Transaction Type
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditFormData(prev => ({ ...prev, type: 'in' }))}
+                    className={`py-2 px-3 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
+                      editFormData.type === 'in'
+                        ? 'bg-emerald-50 border-emerald-500 text-emerald-700 shadow-sm ring-1 ring-emerald-500'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <ArrowUpRight className="w-4 h-4 text-emerald-600" />
+                    <span>Cash In (+)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditFormData(prev => ({ ...prev, type: 'out' }))}
+                    className={`py-2 px-3 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
+                      editFormData.type === 'out'
+                        ? 'bg-rose-50 border-rose-500 text-rose-700 shadow-sm ring-1 ring-rose-500'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <ArrowDownLeft className="w-4 h-4 text-rose-600" />
+                    <span>Cash Out (-)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Amount and Date row */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">
+                    Amount (₹) *
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">₹</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      value={editFormData.amount}
+                      onChange={e => setEditFormData(prev => ({ ...prev, amount: e.target.value }))}
+                      placeholder="0.00"
+                      className="w-full pl-7 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono font-bold text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">
+                    Transaction Date *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={editFormData.date}
+                    onChange={e => setEditFormData(prev => ({ ...prev, date: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700"
+                  />
+                </div>
+              </div>
+
+              {/* Merchant / Description */}
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">
+                  Merchant / Description *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editFormData.description}
+                  onChange={e => setEditFormData(prev => ({ ...prev, description: e.target.value }))}
+                  placeholder="e.g. Vendor Payment, Fuel, Client Invoice"
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
+                />
+              </div>
+
+              {/* Category & Payment Mode row */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">
+                    Category
+                  </label>
+                  <select
+                    value={editFormData.category}
+                    onChange={e => setEditFormData(prev => ({ ...prev, category: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-700"
+                  >
+                    {categories.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">
+                    Payment Mode
+                  </label>
+                  <select
+                    value={editFormData.mode}
+                    onChange={e => setEditFormData(prev => ({ ...prev, mode: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-700"
+                  >
+                    {paymentModes.map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsEditModalOpen(false)}
+                  disabled={isUpdating}
+                  className="px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdating}
+                  className="px-5 py-2 rounded-lg text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-sm hover:shadow transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isUpdating ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Updating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Update Transaction</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
