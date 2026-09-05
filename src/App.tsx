@@ -255,7 +255,8 @@ export default function App() {
     'settings': 'System Settings'
   };
 
-  const isSuperAdmin = !!currentUser && ((currentUser.role || '').toLowerCase().includes('admin'));
+  const isSuperAdmin = !!currentUser && ((currentUser.role || '').toLowerCase().replace(/[\s_-]+/g, '') === 'superadmin');
+  const isAdmin = !!currentUser && ((currentUser.role || '').toLowerCase().includes('admin'));
 
   // Render the appropriate panel view
   const renderTabContent = () => {
@@ -268,27 +269,29 @@ export default function App() {
             onNavigateToTab={(tab) => navigate('/' + tab)}
             dateRange={dateRange}
             onResetDateRange={() => setDateRange(getPresetDateRange('all'))}
+            isSuperAdmin={isSuperAdmin}
+            currentUser={currentUser}
           />
         );
       case 'users':
-        return <UsersView onRefreshStats={fetchEntries} isSuperAdmin={isSuperAdmin} dateRange={dateRange} />;
+        return <UsersView onRefreshStats={fetchEntries} isSuperAdmin={isAdmin} dateRange={dateRange} />;
       case 'cashbooks':
-        return <CashbooksView onAddCashbook={fetchEntries} isSuperAdmin={isSuperAdmin} dateRange={dateRange} />;
+        return <CashbooksView onAddCashbook={fetchEntries} isSuperAdmin={isAdmin} dateRange={dateRange} />;
       case 'entries':
         return (
           <EntriesView
             entries={entries}
             onEntryLogged={fetchEntries}
-            isSuperAdmin={isSuperAdmin}
+            isSuperAdmin={isAdmin}
             dateRange={dateRange}
           />
         );
       case 'attachments':
-        return <AttachmentsView isSuperAdmin={isSuperAdmin} />;
+        return <AttachmentsView isSuperAdmin={isAdmin} />;
       case 'cloud':
-        return <AIAttachmentsView onProcessSuccess={fetchEntries} isSuperAdmin={isSuperAdmin} />;
+        return <AIAttachmentsView onProcessSuccess={fetchEntries} isSuperAdmin={isAdmin} />;
       case 'settings':
-        return <SettingsView onResetDatabase={fetchEntries} isSuperAdmin={isSuperAdmin} />;
+        return <SettingsView onResetDatabase={fetchEntries} isSuperAdmin={isSuperAdmin} currentUser={currentUser} />;
       default:
         return (
           <DashboardView
@@ -297,6 +300,8 @@ export default function App() {
             onNavigateToTab={(tab) => navigate('/' + tab)}
             dateRange={dateRange}
             onResetDateRange={() => setDateRange(getPresetDateRange('all'))}
+            isSuperAdmin={isSuperAdmin}
+            currentUser={currentUser}
           />
         );
     }
@@ -376,6 +381,8 @@ export default function App() {
           onRefresh={handleGlobalRefresh}
           isRefreshing={isRefreshing}
           onToggleMobileMenu={() => setIsMobileMenuOpen(prev => !prev)}
+          currentUser={currentUser}
+          isSuperAdmin={isSuperAdmin}
         />
 
         {/* Dynamic Panel view container */}

@@ -12,15 +12,20 @@ import {
   FileCode,
   HelpCircle
 } from 'lucide-react';
+import SettingsAccessRestricted from './SettingsAccessRestricted';
 
 const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(input, { ...init, credentials: 'include' });
 
 interface SettingsViewProps {
   onResetDatabase: () => void;
   isSuperAdmin?: boolean;
+  currentUser?: { username: string; role: string; full_name?: string } | null;
 }
 
-export default function SettingsView({ onResetDatabase, isSuperAdmin = true }: SettingsViewProps) {
+export default function SettingsView({ onResetDatabase, isSuperAdmin = false, currentUser }: SettingsViewProps) {
+  const [accessChecked, setAccessChecked] = useState(false);
+  const [canAccess, setCanAccess] = useState(isSuperAdmin);
+
   const [profile, setProfile] = useState({
     name: 'Triptraccker Admin',
     email: 'triptraccker@gmail.com',
@@ -34,6 +39,30 @@ export default function SettingsView({ onResetDatabase, isSuperAdmin = true }: S
     schemaMissing: false,
     loading: true
   });
+
+  useEffect(() => {
+    if (isSuperAdmin) {
+      setCanAccess(true);
+      setAccessChecked(true);
+      return;
+    }
+
+    fetch('/api/settings/access-status')
+      .then(res => res.json())
+      .then(data => {
+        if (data.canAccess || data.isSuperAdmin) {
+          setCanAccess(true);
+        } else {
+          setCanAccess(false);
+        }
+      })
+      .catch(() => {
+        setCanAccess(false);
+      })
+      .finally(() => {
+        setAccessChecked(true);
+      });
+  }, [isSuperAdmin]);
 
   const fetchConnectionStatus = async () => {
     try {
@@ -109,11 +138,36 @@ export default function SettingsView({ onResetDatabase, isSuperAdmin = true }: S
     }
   };
 
+  if (!accessChecked) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <RefreshCw className="w-7 h-7 text-blue-600 animate-spin mb-3" />
+        <p className="text-sm font-medium text-slate-500">Verifying Settings access authorization...</p>
+      </div>
+    );
+  }
+
+  if (!canAccess) {
+    return (
+      <SettingsAccessRestricted
+        currentUser={currentUser}
+        onAccessGranted={() => setCanAccess(true)}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6 max-w-4xl">
       {/* Page Header */}
       <div>
-        <h2 className="text-2xl font-bold font-sans text-slate-900 tracking-tight">System Settings</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-2xl font-bold font-sans text-slate-900 tracking-tight">System Settings</h2>
+          {!isSuperAdmin && (
+            <span className="px-3 py-1 rounded-full bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Access Granted by Super Admin
+            </span>
+          )}
+        </div>
         <p className="text-slate-500 text-sm mt-1">Configure profile details, view API credentials guidance, and manage database connection indexes.</p>
       </div>
 

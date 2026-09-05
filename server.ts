@@ -555,6 +555,45 @@ function recordAuditLog(logData: {
   }
 }
 
+export interface AccessRequest {
+  id: string;
+  admin_id: string;
+  admin_username: string;
+  admin_name: string;
+  admin_role: string;
+  target: string;
+  requested_at: string;
+  status: 'pending' | 'approved' | 'rejected' | 'dismissed';
+  message: string;
+  reviewed_at?: string;
+  reviewed_by?: string;
+}
+
+const ACCESS_REQUESTS_FILE = path.join(process.cwd(), 'system_access_requests.json');
+
+function readAccessRequests(): AccessRequest[] {
+  try {
+    if (fs.existsSync(ACCESS_REQUESTS_FILE)) {
+      const content = fs.readFileSync(ACCESS_REQUESTS_FILE, 'utf8');
+      const parsed: AccessRequest[] = JSON.parse(content);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('[ACCESS REQUESTS] Failed to read file:', err);
+  }
+  return [];
+}
+
+function writeAccessRequests(requests: AccessRequest[]) {
+  try {
+    fs.writeFileSync(ACCESS_REQUESTS_FILE, JSON.stringify(requests, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[ACCESS REQUESTS] Failed to write file:', err);
+  }
+}
+
 async function getAdminUserByUsername(username: string): Promise<FallbackAdmin | null> {
   const adminClient = getSupabaseAdmin();
   const searchLower = (username || '').toLowerCase().trim();
@@ -1696,6 +1735,203 @@ app.delete('/api/admin/users/:id', requireSuperAdmin, async (req: any, res: any)
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to delete admin user: ' + err.message });
   }
+});
+
+// Settings Access Control & Super Admin Notifications
+app.get('/api/settings/access-status', async (req: any, res: any) => {
+  const user = req.adminUser;
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const role = ((user.role || '') as string).toLowerCase().replace(/[\s_-]+/g, '');
+  const isSuperAdmin = role === 'superadmin';
+  if (isSuperAdmin) {
+    return res.json({
+      canAccess: true,
+      isSuperAdmin: true,
+      status: 'approved',
+      request: null
+    });
+  }
+
+  const requests = readAccessRequests();
+  const userRequests = requests.filter(r => 
+    (user.id && r.admin_id === user.id) || 
+    (user.username && r.admin_username && r.admin_username.toLowerCase() === user.username.toLowerCase())
+  ).sort((a, b) => new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime());
+
+  const latest = userRequests[0] || null;
+  const isApproved = latest?.status === 'approved';
+
+  return res.json({
+    canAccess: isApproved,
+    isSuperAdmin: false,
+    status: latest?.status || 'none',
+    request: latest
+  });
+});
+
+app.post('/api/settings/access-request', async (req: any, res: any) => {
+  const user = req.adminUser;
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const role = ((user.role || '') as string).toLowerCase().replace(/[\s_-]+/g, '');
+  if (role === 'superadmin') {
+    return res.json({
+      success: true,
+      message: 'Super Administrator already has full access to System Settings.',
+      canAccess: true
+    });
+  }
+
+  const adminName = user.full_name || user.username || 'Admin';
+  const requests = readAccessRequests();
+
+  const existingPending = requests.find(r => 
+    ((user.id && r.admin_id === user.id) || (user.username && r.admin_username && r.admin_username.toLowerCase() === user.username.toLowerCase())) &&
+    r.status === 'pending'
+  );
+
+  let newReq: AccessRequest;
+  if (existingPending) {
+    existingPending.requested_at = new Date().toISOString();
+    existingPending.admin_name = adminName;
+    existingPending.message = `Admin ${adminName} (${user.username}) is requesting access to System Settings`;
+    newReq = existingPending;
+  } else {
+    newReq = {
+      id: `req-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      admin_id: user.id || `admin-${Date.now()}`,
+      admin_username: user.username,
+      admin_name: adminName,
+      admin_role: user.role || 'admin',
+      target: 'System Settings',
+      requested_at: new Date().toISOString(),
+      status: 'pending',
+      message: `Admin ${adminName} (${user.username}) is requesting access to System Settings`
+    };
+    requests.unshift(newReq);
+  }
+
+  writeAccessRequests(requests);
+
+  recordAuditLog({
+    user_name: adminName,
+    user_role: 'Admin',
+    user_type: 'Admin',
+    action: 'Settings Access Requested',
+    details: `Admin ${adminName} (${user.username}) requested authorization to access System Settings`,
+    format: 'System'
+  });
+
+  return res.json({
+    success: true,
+    message: 'Access request successfully sent to Super Administrator.',
+    request: newReq
+  });
+});
+
+app.get('/api/notifications', async (req: any, res: any) => {
+  const user = req.adminUser;
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const role = ((user.role || '') as string).toLowerCase().replace(/[\s_-]+/g, '');
+  const isSuperAdmin = role === 'superadmin';
+  const requests = readAccessRequests();
+
+  if (isSuperAdmin) {
+    const pending = requests.filter(r => r.status === 'pending');
+    return res.json({
+      isSuperAdmin: true,
+      unreadCount: pending.length,
+      notifications: requests.map(r => ({
+        id: r.id,
+        type: 'access_request',
+        title: 'Settings Access Request',
+        message: `Admin ${r.admin_name} (${r.admin_username}) is requesting access to System Settings`,
+        admin_id: r.admin_id,
+        admin_name: r.admin_name,
+        admin_username: r.admin_username,
+        admin_role: r.admin_role,
+        target: r.target,
+        timestamp: r.requested_at,
+        status: r.status,
+        reviewed_at: r.reviewed_at,
+        reviewed_by: r.reviewed_by
+      }))
+    });
+  } else {
+    const myRequests = requests.filter(r => 
+      (user.id && r.admin_id === user.id) || 
+      (user.username && r.admin_username && r.admin_username.toLowerCase() === user.username.toLowerCase())
+    );
+    const unread = myRequests.filter(r => r.status === 'approved' || r.status === 'rejected');
+    return res.json({
+      isSuperAdmin: false,
+      unreadCount: unread.length,
+      notifications: myRequests.map(r => ({
+        id: r.id,
+        type: 'access_request_status',
+        title: r.status === 'approved' ? 'Settings Access Approved' : r.status === 'rejected' ? 'Settings Access Declined' : 'Settings Access Pending',
+        message: r.status === 'approved'
+          ? 'Super Administrator has approved your access to System Settings.'
+          : r.status === 'rejected'
+          ? 'Super Administrator declined your access to System Settings.'
+          : 'Your request for System Settings access is currently pending Super Admin review.',
+        timestamp: r.reviewed_at || r.requested_at,
+        status: r.status
+      }))
+    });
+  }
+});
+
+app.post('/api/settings/access-requests/:id/respond', async (req: any, res: any) => {
+  const user = req.adminUser;
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const role = ((user.role || '') as string).toLowerCase().replace(/[\s_-]+/g, '');
+  if (role !== 'superadmin') {
+    return res.status(403).json({ error: 'Forbidden: Only Super Administrators can grant or decline access.' });
+  }
+
+  const { id } = req.params;
+  const { action } = req.body; // 'approve' | 'reject' | 'dismiss' | 'revoke'
+
+  if (!['approve', 'reject', 'dismiss', 'revoke'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid action' });
+  }
+
+  const requests = readAccessRequests();
+  const request = requests.find(r => r.id === id);
+  if (!request) {
+    return res.status(404).json({ error: 'Access request not found' });
+  }
+
+  const superAdminName = user.full_name || user.username || 'Super Admin';
+  request.status = action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : action === 'revoke' ? 'rejected' : 'dismissed';
+  request.reviewed_at = new Date().toISOString();
+  request.reviewed_by = superAdminName;
+
+  writeAccessRequests(requests);
+
+  recordAuditLog({
+    user_name: superAdminName,
+    user_role: 'Super Admin',
+    user_type: 'Admin',
+    action: `Settings Access ${action.toUpperCase()}`,
+    details: `${action === 'approve' ? 'Granted' : action === 'revoke' ? 'Revoked' : 'Declined'} Settings access for Admin ${request.admin_name} (${request.admin_username})`,
+    format: 'System'
+  });
+
+  return res.json({
+    success: true,
+    message: `Access request ${action}d successfully.`,
+    request
+  });
 });
 
 // User Activity Monitoring & Audit Logs API

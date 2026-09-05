@@ -19,7 +19,9 @@ import {
   Sparkles,
   FileText,
   Calendar,
-  X
+  X,
+  KeyRound,
+  Bell
 } from 'lucide-react';
 import { Entry, DashboardStats } from '../types';
 import { DateRangeFilter, isDateInRange } from '../utils/dateUtils';
@@ -32,9 +34,19 @@ interface DashboardViewProps {
   onNavigateToTab: (tab: string) => void;
   dateRange?: DateRangeFilter;
   onResetDateRange?: () => void;
+  isSuperAdmin?: boolean;
+  currentUser?: any;
 }
 
-export default function DashboardView({ entries, onAddEntryClick, onNavigateToTab, dateRange, onResetDateRange }: DashboardViewProps) {
+export default function DashboardView({ 
+  entries, 
+  onAddEntryClick, 
+  onNavigateToTab, 
+  dateRange, 
+  onResetDateRange,
+  isSuperAdmin = false,
+  currentUser
+}: DashboardViewProps) {
   const [stats, setStats] = useState<DashboardStats>({
     totalUsers: 0,
     activeUsers: 0,
@@ -51,6 +63,41 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
   const [searchQuery, setSearchQuery] = useState('');
   const [attachmentDropdownOpen, setAttachmentDropdownOpen] = useState(false);
   const [attachmentCardType, setAttachmentCardType] = useState<'all' | 'attachments' | 'ai-attachments'>('all');
+  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
+  const [isProcessingRequest, setIsProcessingRequest] = useState<string | null>(null);
+
+  // Fetch pending access requests for Super Admin
+  const fetchPendingRequests = async () => {
+    if (!isSuperAdmin) return;
+    try {
+      const res = await fetch('/api/notifications');
+      if (res.ok) {
+        const data = await res.json();
+        const pending = (data.notifications || []).filter((n: any) => n.type === 'access_request' && n.status === 'pending');
+        setPendingRequests(pending);
+      }
+    } catch (err) {
+      console.error('Failed to fetch pending requests in dashboard:', err);
+    }
+  };
+
+  const handleRespondRequest = async (requestId: string, action: 'approve' | 'reject') => {
+    try {
+      setIsProcessingRequest(requestId + action);
+      const res = await fetch(`/api/settings/access-requests/${requestId}/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
+      if (res.ok) {
+        fetchPendingRequests();
+      }
+    } catch (err) {
+      console.error('Failed to respond to request:', err);
+    } finally {
+      setIsProcessingRequest(null);
+    }
+  };
 
   // Fetch server stats
   const fetchStats = async () => {
@@ -75,15 +122,24 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
 
   useEffect(() => {
     fetchStats();
+    if (isSuperAdmin) {
+      fetchPendingRequests();
+    }
     // Real-time stats auto-refresh
-    const interval = setInterval(fetchStats, 10000);
-    const handleGlobalRefresh = () => fetchStats();
+    const interval = setInterval(() => {
+      fetchStats();
+      if (isSuperAdmin) fetchPendingRequests();
+    }, 10000);
+    const handleGlobalRefresh = () => {
+      fetchStats();
+      if (isSuperAdmin) fetchPendingRequests();
+    };
     window.addEventListener('app-global-refresh', handleGlobalRefresh);
     return () => {
       clearInterval(interval);
       window.removeEventListener('app-global-refresh', handleGlobalRefresh);
     };
-  }, [entries, dateRange]);
+  }, [entries, dateRange, isSuperAdmin]);
 
   // Format currency in Indian Rupees format (Lakhs/Crores)
   const formatINR = (value: number) => {
@@ -267,6 +323,56 @@ export default function DashboardView({ entries, onAddEntryClick, onNavigateToTa
               Reset Filter
             </button>
           )}
+        </div>
+      )}
+
+      {/* Super Admin: Pending Settings Access Request Alert Banner */}
+      {isSuperAdmin && pendingRequests.length > 0 && (
+        <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-300 rounded-2xl p-4 sm:p-5 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <KeyRound className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-amber-200 text-amber-900">
+                    Access Authorization Request
+                  </span>
+                  <span className="text-xs text-amber-700 font-semibold">
+                    {pendingRequests.length} pending
+                  </span>
+                </div>
+                <h4 className="text-sm sm:text-base font-bold text-slate-900 mt-1">
+                  Admin {pendingRequests[0].admin_name} ({pendingRequests[0].admin_username}) is requesting access to System Settings
+                </h4>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  An administrator is requesting authorization to view and configure platform system settings.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+              <button
+                onClick={() => handleRespondRequest(pendingRequests[0].id, 'reject')}
+                disabled={!!isProcessingRequest}
+                className="px-3.5 py-2 text-xs font-bold text-slate-700 hover:text-rose-700 hover:bg-rose-50 border border-slate-300 rounded-xl transition-colors cursor-pointer"
+              >
+                Decline
+              </button>
+              <button
+                onClick={() => handleRespondRequest(pendingRequests[0].id, 'approve')}
+                disabled={!!isProcessingRequest}
+                className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                {isProcessingRequest === pendingRequests[0].id + 'approve' ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                )}
+                <span>Grant Access</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
