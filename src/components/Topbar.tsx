@@ -148,7 +148,7 @@ export default function Topbar({
   };
 
   return (
-    <header className="h-16 fixed top-0 right-0 left-0 md:left-[260px] bg-white border-b border-slate-200 shadow-sm flex justify-between items-center px-4 md:px-6 z-40 transition-all duration-200">
+    <header className="h-16 w-full shrink-0 bg-white border-b border-slate-200 shadow-xs flex justify-between items-center px-4 md:px-6 z-30 sticky top-0 transition-all duration-200">
       {/* Left section: Hamburger (Mobile) + Title / Brand */}
       <div className="flex items-center gap-3 md:gap-6 min-w-0 flex-1 mr-2">
         {/* Mobile Hamburger (3 lines) button */}

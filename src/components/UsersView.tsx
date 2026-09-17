@@ -60,19 +60,28 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
   const [isSubmittingAccess, setIsSubmittingAccess] = useState(false);
   const [accessSubmittedSuccess, setAccessSubmittedSuccess] = useState(false);
 
-  // Form State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isEditMode, setIsEditMode] = useState(false);
+  // Register New User Modal State
+  const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
+  const [registerFullName, setRegisterFullName] = useState('');
+  const [registerEmail, setRegisterEmail] = useState('');
+  const [registerPassword, setRegisterPassword] = useState('');
+  const [registerRole, setRegisterRole] = useState<'User' | 'Admin' | 'Super Admin'>('User');
+  const [registerPhone, setRegisterPhone] = useState('');
+  const [showRegisterPassword, setShowRegisterPassword] = useState(false);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [isRegistering, setIsRegistering] = useState(false);
+
+  // Edit User Profile Modal State
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  
-  const [formData, setFormData] = useState({
+  const [editFormData, setEditFormData] = useState({
     name: '',
     role: 'User' as 'Admin' | 'Manager' | 'User',
     email: '',
     phone: '',
     status: 'Active' as 'Active' | 'Pending' | 'Inactive'
   });
-  const [autoConfirm, setAutoConfirm] = useState<boolean>(true);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   // Ban / Block & Unblock Modal State
   const [isBanModalOpen, setIsBanModalOpen] = useState(false);
@@ -88,6 +97,8 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
   const [unbanLoading, setUnbanLoading] = useState(false);
 
   const [notification, setNotification] = useState<string | null>(null);
+  const [isDbConnected, setIsDbConnected] = useState<boolean>(true);
+  const [isCheckingDb, setIsCheckingDb] = useState<boolean>(false);
 
   // Super Admin Role Assignment & Admin Users List States
   const [adminUsers, setAdminUsers] = useState<any[]>([]);
@@ -156,12 +167,8 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
     setShowPassword(false);
 
     if (userToAssign) {
-      const matchingAdmin = adminUsers.find(a => 
-        a.id === userToAssign.id ||
-        (a.username && userToAssign.name && a.username.toLowerCase() === userToAssign.name.toLowerCase()) ||
-        (a.full_name && userToAssign.name && a.full_name.toLowerCase() === userToAssign.name.toLowerCase()) ||
-        (a.username && userToAssign.email && userToAssign.email.toLowerCase().includes(a.username.toLowerCase()))
-      );
+      // Strict matching by user ID only to ensure independent admin authorizations
+      const matchingAdmin = adminUsers.find(a => a.id === userToAssign.id);
 
       if (matchingAdmin) {
         setEditingAdminId(matchingAdmin.id);
@@ -395,11 +402,34 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
       if (res.ok) {
         const data = await res.json();
         setUsers(data);
+        setIsDbConnected(true);
+      } else {
+        setIsDbConnected(false);
       }
     } catch (err) {
       console.error('Error fetching users:', err);
+      setIsDbConnected(false);
     } finally {
       if (showLoading) setLoading(false);
+    }
+  };
+
+  const handleCheckDb = async () => {
+    setIsCheckingDb(true);
+    try {
+      const res = await fetch('/api/users');
+      if (res.ok) {
+        setIsDbConnected(true);
+        triggerNotification('Supabase Database connection is active.');
+      } else {
+        setIsDbConnected(false);
+        triggerNotification('Database connection check failed.');
+      }
+    } catch {
+      setIsDbConnected(false);
+      triggerNotification('Unable to reach database service.');
+    } finally {
+      setIsCheckingDb(false);
     }
   };
 
@@ -432,45 +462,103 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
   };
 
   // Submit form (Create / Update)
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleRegisterUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.email) return;
+    setRegisterError(null);
 
+    // Validation checks matching exact required messages
+    if (!registerFullName.trim()) {
+      setRegisterError('Full name is required.');
+      return;
+    }
+
+    if (!registerEmail.trim()) {
+      setRegisterError('Email address is required.');
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(registerEmail.trim())) {
+      setRegisterError('Please enter a valid email address.');
+      return;
+    }
+
+    if (!registerPassword) {
+      setRegisterError('Password is required.');
+      return;
+    }
+
+    if (registerPassword.length < 6) {
+      setRegisterError('Password should be at least 6 characters.');
+      return;
+    }
+
+    setIsRegistering(true);
     try {
-      const url = isEditMode && selectedUser ? `/api/users/${selectedUser.id}` : '/api/users';
-      const method = isEditMode ? 'PUT' : 'POST';
-
-      const statusVal = isEditMode
-        ? formData.status
-        : (autoConfirm ? 'Active' : 'Pending');
-
-      const res = await fetch(url, {
-        method,
+      const res = await fetch('/api/users', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...formData,
-          status: statusVal,
-          autoConfirm: !isEditMode ? autoConfirm : undefined
+          name: registerFullName.trim(),
+          email: registerEmail.trim(),
+          password: registerPassword,
+          role: registerRole,
+          phone: registerPhone.trim() || undefined
         })
       });
 
+      const data = await res.json().catch(() => ({}));
+
       if (res.ok) {
-        triggerNotification(
-          isEditMode
-            ? 'User profile updated successfully!'
-            : autoConfirm
-              ? 'New user registered and auto-confirmed successfully!'
-              : 'New user registered! Email confirmation pending.'
-        );
-        setIsModalOpen(false);
-        setFormData({ name: '', role: 'User', email: '', phone: '', status: 'Active' });
-        setAutoConfirm(true);
+        triggerNotification('User registered successfully.');
+        setIsRegisterModalOpen(false);
+        setRegisterFullName('');
+        setRegisterEmail('');
+        setRegisterPassword('');
+        setRegisterRole('User');
+        setRegisterPhone('');
+        setShowRegisterPassword(false);
+        setRegisterError(null);
+        fetchUsers();
+        if (isSuperAdmin) fetchAdminUsers();
+        if (onRefreshStats) onRefreshStats();
+      } else {
+        setRegisterError(data.error || 'Failed to register user.');
+      }
+    } catch (err: any) {
+      setRegisterError('Network error while registering user. Please try again.');
+    } finally {
+      setIsRegistering(false);
+    }
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUser || !editFormData.name || !editFormData.email) return;
+
+    setIsSavingEdit(true);
+    try {
+      const res = await fetch(`/api/users/${selectedUser.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editFormData)
+      });
+
+      if (res.ok) {
+        triggerNotification('User profile updated successfully!');
+        setIsEditModalOpen(false);
         setSelectedUser(null);
         fetchUsers();
         if (onRefreshStats) onRefreshStats();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        triggerNotification(data.error || 'Failed to update user profile.');
       }
-    } catch (err) {
-      console.error('Error saving user:', err);
+    } catch (err: any) {
+      console.error('Error saving user profile:', err);
+      triggerNotification('Network error while updating user profile.');
+    } finally {
+      setIsSavingEdit(false);
     }
   };
 
@@ -487,7 +575,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
   const handleSubmitAccessRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!accessReason.trim()) {
-      setAccessReasonError('Please provide a reason for requesting deletion access (కారణం తప్పనిసరిగా రాయాలి).');
+      setAccessReasonError('Please provide a reason for requesting deletion access.');
       return;
     }
     if (!accessTargetUser) return;
@@ -556,7 +644,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
   const handleConfirmBan = async () => {
     if (!selectedUserForBan) return;
     if (!banReason.trim()) {
-      setBanReasonError('A valid reason is required to block this user (కారణం తప్పనిసరిగా రాయాలి).');
+      setBanReasonError('A valid reason is required to block this user.');
       return;
     }
     setBanLoading(true);
@@ -694,15 +782,14 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
   // Open Edit Modal
   const openEditModal = (user: User) => {
     setSelectedUser(user);
-    setIsEditMode(true);
-    setFormData({
+    setEditFormData({
       name: user.name,
       role: user.role,
       email: user.email,
       phone: user.phone || '',
       status: user.status
     });
-    setIsModalOpen(true);
+    setIsEditModalOpen(true);
   };
 
   // Export CSV
@@ -837,7 +924,29 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
           <h2 className="text-2xl font-bold font-sans text-slate-900 tracking-tight">Users Management</h2>
           <p className="text-slate-500 text-sm mt-1">Manage platform users, view their activity, and update roles.</p>
         </div>
-        <div className="flex flex-wrap gap-2 sm:gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          {/* Compact Database Connection Indicator */}
+          <button
+            type="button"
+            onClick={handleCheckDb}
+            disabled={isCheckingDb}
+            title={isDbConnected ? "Supabase Database Connected (click to check connection)" : "Database Offline (click to retry)"}
+            className={`inline-flex items-center gap-2 h-10 px-3 rounded-lg text-xs font-medium border transition-colors cursor-pointer active:scale-98 ${
+              isDbConnected
+                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-800 hover:bg-emerald-100/80'
+                : 'bg-rose-50 border-rose-200 text-rose-800 hover:bg-rose-100'
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full shrink-0 ${
+              isDbConnected 
+                ? (isCheckingDb ? 'bg-emerald-500 animate-spin' : 'bg-emerald-500 animate-pulse') 
+                : 'bg-rose-500'
+            }`} />
+            <span className="font-semibold whitespace-nowrap">
+              {isDbConnected ? 'Database Connected' : 'Database Offline'}
+            </span>
+          </button>
+
           {isSuperAdmin && (
             <button
               onClick={() => openAssignRoleModal()}
@@ -856,9 +965,13 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
           </button>
           <button
             onClick={() => {
-              setIsEditMode(false);
-              setFormData({ name: '', role: 'User', email: '', phone: '', status: 'Active' });
-              setIsModalOpen(true);
+              setRegisterFullName('');
+              setRegisterEmail('');
+              setRegisterPassword('');
+              setRegisterPhone('');
+              setShowRegisterPassword(false);
+              setRegisterError(null);
+              setIsRegisterModalOpen(true);
             }}
             className="h-10 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 cursor-pointer"
           >
@@ -1534,24 +1647,171 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
         </div>
       </div>
 
-      {/* Modal overlays */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl border border-slate-200 shadow-xl max-w-md w-full overflow-hidden animate-fade-in mx-4">
+      {/* Register New User Modal */}
+      {isRegisterModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-xl max-w-md w-full overflow-hidden animate-fade-in">
+            {/* Header */}
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
               <h3 className="font-sans text-base font-bold text-slate-900">
-                {isEditMode ? 'Modify User Profile' : 'Register New User'}
+                Register New User
               </h3>
               <button
-                onClick={() => setIsModalOpen(false)}
-                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition-colors cursor-pointer"
+                type="button"
+                onClick={() => {
+                  setIsRegisterModalOpen(false);
+                  setRegisterError(null);
+                  setRegisterPassword('');
+                }}
+                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition-colors cursor-pointer text-lg font-bold leading-none"
+                aria-label="Close"
               >
-                <X className="w-4 h-4" />
+                ×
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              {/* Name */}
+            {/* Error Banner */}
+            {registerError && (
+              <div className="mx-6 mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                <span>{registerError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleRegisterUser} className="p-6 space-y-4">
+              {/* Full Name */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  FULL NAME
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Enter full name"
+                  value={registerFullName}
+                  onChange={(e) => setRegisterFullName(e.target.value)}
+                  className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-colors"
+                />
+              </div>
+
+              {/* Email Address */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  EMAIL ADDRESS
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="Enter email address"
+                  value={registerEmail}
+                  onChange={(e) => setRegisterEmail(e.target.value)}
+                  className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-colors"
+                />
+              </div>
+
+              {/* Password */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  PASSWORD
+                </label>
+                <div className="relative">
+                  <input
+                    type={showRegisterPassword ? 'text' : 'password'}
+                    required
+                    minLength={6}
+                    placeholder="Enter password"
+                    value={registerPassword}
+                    onChange={(e) => setRegisterPassword(e.target.value)}
+                    className="w-full h-10 pl-3 pr-10 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowRegisterPassword(!showRegisterPassword)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                    title={showRegisterPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showRegisterPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Role */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  ROLE
+                </label>
+                <select
+                  value={registerRole}
+                  onChange={(e) => setRegisterRole(e.target.value as any)}
+                  className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:border-blue-500 transition-colors cursor-pointer"
+                >
+                  <option value="User">User</option>
+                  <option value="Admin">Admin</option>
+                  {isSuperAdmin && <option value="Super Admin">Super Admin</option>}
+                </select>
+              </div>
+
+              {/* Phone Number (Optional) */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  PHONE NUMBER (OPTIONAL)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Enter phone number"
+                  value={registerPhone}
+                  onChange={(e) => setRegisterPhone(e.target.value)}
+                  className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 font-mono transition-colors"
+                />
+              </div>
+
+              {/* Actions: Cancel & Register User */}
+              <div className="flex gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isRegistering}
+                  onClick={() => {
+                    setIsRegisterModalOpen(false);
+                    setRegisterError(null);
+                    setRegisterPassword('');
+                    setRegisterRole('User');
+                  }}
+                  className="flex-1 h-10 border border-slate-200 hover:bg-slate-50 rounded-lg text-sm font-medium text-slate-700 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isRegistering}
+                  className="flex-1 h-10 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer shadow-sm flex items-center justify-center gap-2"
+                >
+                  {isRegistering && <RefreshCw className="w-4 h-4 animate-spin" />}
+                  <span>{isRegistering ? 'Creating User...' : 'Register User'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modify User Profile Modal (Edit user) */}
+      {isEditModalOpen && selectedUser && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-xl max-w-md w-full overflow-hidden animate-fade-in">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h3 className="font-sans text-base font-bold text-slate-900">
+                Modify User Profile
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsEditModalOpen(false)}
+                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition-colors cursor-pointer text-lg font-bold leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="p-6 space-y-4">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   Full Name
@@ -1560,13 +1820,12 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
                   type="text"
                   required
                   placeholder="e.g. Elena Rodriguez"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  value={editFormData.name}
+                  onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
                   className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500"
                 />
               </div>
 
-              {/* Email */}
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   Email Address
@@ -1575,24 +1834,12 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
                   type="email"
                   required
                   placeholder="e.g. elena@company.net"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  value={editFormData.email}
+                  onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
                   className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500"
                 />
-                {!isEditMode && (
-                  <label className="flex items-center gap-2 cursor-pointer mt-2 text-xs text-slate-600 select-none bg-slate-50 p-2 rounded-lg border border-slate-200/60">
-                    <input
-                      type="checkbox"
-                      checked={autoConfirm}
-                      onChange={(e) => setAutoConfirm(e.target.checked)}
-                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                    />
-                    <span className="font-medium text-slate-700">Auto Confirm Registration (No email verification required)</span>
-                  </label>
-                )}
               </div>
 
-              {/* Phone */}
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   Phone Number
@@ -1600,22 +1847,20 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
                 <input
                   type="text"
                   placeholder="e.g. +1 (555) 000-0000"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  value={editFormData.phone}
+                  onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value })}
                   className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 font-mono"
                 />
               </div>
 
-              {/* Grid: Role & Status */}
               <div className="grid grid-cols-2 gap-4">
-                {/* Role */}
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                     System Role
                   </label>
                   <select
-                    value={formData.role}
-                    onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
+                    value={editFormData.role}
+                    onChange={(e) => setEditFormData({ ...editFormData, role: e.target.value as any })}
                     className="w-full h-10 px-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-800 focus:outline-none focus:border-blue-500 cursor-pointer"
                   >
                     <option value="User">User</option>
@@ -1624,14 +1869,13 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
                   </select>
                 </div>
 
-                {/* Status */}
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                     Status State
                   </label>
                   <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                    value={editFormData.status}
+                    onChange={(e) => setEditFormData({ ...editFormData, status: e.target.value as any })}
                     className="w-full h-10 px-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-800 focus:outline-none focus:border-blue-500 cursor-pointer"
                   >
                     <option value="Active">Active</option>
@@ -1641,20 +1885,21 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
                 </div>
               </div>
 
-              {/* Actions */}
               <div className="flex gap-3 pt-4 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={() => setIsEditModalOpen(false)}
                   className="flex-1 h-10 border border-slate-200 hover:bg-slate-50 rounded-lg text-sm font-medium text-slate-700 transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 h-10 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer shadow-sm"
+                  disabled={isSavingEdit}
+                  className="flex-1 h-10 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer shadow-sm flex items-center justify-center gap-2"
                 >
-                  {isEditMode ? 'Save Changes' : 'Register User'}
+                  {isSavingEdit && <RefreshCw className="w-4 h-4 animate-spin" />}
+                  <span>{isSavingEdit ? 'Saving...' : 'Save Changes'}</span>
                 </button>
               </div>
             </form>
@@ -2097,7 +2342,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
                     Reason for Block <span className="text-rose-600">* (Mandatory)</span>
                   </label>
-                  <span className="text-[11px] text-rose-600 font-semibold">కారణం తప్పనిసరి</span>
+                  <span className="text-[11px] text-rose-600 font-semibold">Mandatory</span>
                 </div>
                 <textarea
                   rows={2}
@@ -2141,7 +2386,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
                   type="button"
                   disabled={banLoading || !banReason.trim()}
                   onClick={handleConfirmBan}
-                  title={!banReason.trim() ? "Please write a reason to block this user (కారణం తప్పనిసరి)" : "Confirm Ban User"}
+                  title={!banReason.trim() ? "Please write a reason to block this user" : "Confirm Ban User"}
                   className={`flex-1 h-11 rounded-xl text-sm font-bold transition-all shadow-md active:scale-98 cursor-pointer flex items-center justify-center gap-2 ${
                     !banReason.trim()
                       ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
@@ -2271,7 +2516,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
         </div>
       )}
 
-      {/* User Deletion Prohibited - DB lonchi delete cheyyali Modal */}
+      {/* Super Admin Direct User Deletion Modal */}
       <AnimatePresence>
         {userToDelete && (
           <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
@@ -2280,144 +2525,111 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.25 }}
-              onClick={() => setUserToDelete(null)}
+              transition={{ duration: 0.2 }}
+              onClick={() => {
+                if (!isDeletingUser) setUserToDelete(null);
+              }}
               className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm"
             />
 
             {/* Smooth Animated Modal Dialog */}
             <motion.div
-              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              initial={{ opacity: 0, scale: 0.95, y: 16 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.94, y: 16 }}
-              transition={{ type: 'spring', duration: 0.35, bounce: 0.12 }}
-              className="relative z-10 bg-white border border-slate-200/90 rounded-3xl max-w-lg w-full shadow-2xl overflow-hidden"
+              exit={{ opacity: 0, scale: 0.95, y: 16 }}
+              transition={{ type: 'spring', duration: 0.3, bounce: 0.1 }}
+              className="relative z-10 bg-white border border-slate-200 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden"
             >
               {/* Header */}
-              <div className="bg-gradient-to-r from-amber-600 via-amber-700 to-amber-800 text-white px-6 py-5 flex items-center justify-between border-b border-amber-600/30">
+              <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between border-b border-slate-800">
                 <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center text-white shadow-inner">
-                    <Database className="w-5 h-5" />
+                  <div className="w-9 h-9 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                    <Trash2 className="w-4.5 h-4.5" />
                   </div>
                   <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-bold text-lg leading-tight font-display tracking-tight text-white">
-                        DB lonchi delete cheyyali
-                      </h3>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase bg-white/20 text-amber-100 border border-white/30">
-                        DB Action
-                      </span>
-                    </div>
-                    <p className="text-xs text-amber-100/90 font-medium mt-0.5">Contact Administrator</p>
+                    <h3 className="font-bold text-base text-white">Delete User</h3>
+                    <p className="text-xs text-slate-400">Permanent account removal</p>
                   </div>
                 </div>
                 <button
                   type="button"
+                  disabled={isDeletingUser}
                   onClick={() => setUserToDelete(null)}
-                  className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/25 text-white flex items-center justify-center transition-colors cursor-pointer"
+                  className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
+              {/* Body */}
               <div className="p-6 space-y-4">
-                {/* Primary Alert Card */}
-                <div className="p-4 bg-amber-50 border border-amber-200/90 rounded-2xl text-xs text-amber-950 leading-relaxed space-y-2.5 shadow-xs">
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
-                      <AlertTriangle className="w-4.5 h-4.5 text-amber-600" />
-                    </div>
-                    <div>
-                      <strong className="text-sm font-bold text-amber-900 block mb-1">
-                        DB lonchi delete cheyyali • Contact Administrator
-                      </strong>
-                      <p className="text-amber-900/80 text-[12px] leading-relaxed">
-                        Super Admin: ఈ అకౌంట్‌ను ప్యానెల్ నుండి నేరుగా తొలగించడం సాధ్యపడదు. Transactions, Cashbooks మరియు Financial Audit Records integrity కోసం, ఈ అకౌంట్‌ను <strong>DB lonchi delete cheyyali</strong>. Please contact administrator to delete directly from the Supabase database.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="pt-2.5 border-t border-amber-200/80 text-amber-900 text-xs font-semibold flex items-center gap-2">
-                    <Database className="w-4 h-4 text-amber-700 shrink-0" />
-                    <span>Please contact administrator to perform direct database deletion in Supabase.</span>
-                  </div>
-                </div>
+                <p className="text-sm text-slate-700 font-medium">
+                  Are you sure you want to permanently delete this user?
+                </p>
 
                 {/* Target User Info Card */}
-                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2.5">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-500 font-medium">Target Account:</span>
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 font-medium">Name:</span>
                     <span className="font-bold text-slate-900">{userToDelete.name}</span>
                   </div>
                   {userToDelete.email && (
-                    <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center justify-between">
                       <span className="text-slate-500 font-medium">Email:</span>
                       <span className="font-mono text-slate-700">{userToDelete.email}</span>
                     </div>
                   )}
-                  <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-200">
-                    <span className="text-slate-500 font-medium">Supabase User ID:</span>
-                    <div className="flex items-center gap-1.5">
-                      <code className="px-2 py-0.5 bg-white border border-slate-200 rounded-lg text-[11px] font-mono text-slate-800 font-semibold select-all">
-                        {userToDelete.id}
-                      </code>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(userToDelete.id);
-                          setCopiedUserId(userToDelete.id);
-                          setTimeout(() => setCopiedUserId(null), 2500);
-                        }}
-                        className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
-                        title="Copy User ID"
-                      >
-                        {copiedUserId === userToDelete.id ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                        ) : (
-                          <Copy className="w-4 h-4" />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="text-[11px] text-slate-600 bg-white p-2.5 rounded-xl border border-slate-100 flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
-                    <span><strong>Supabase DB Path:</strong> Authentication &rarr; Users &rarr; Delete user record</span>
-                  </div>
                 </div>
 
-                {/* Action Buttons */}
-                <div className="flex flex-col sm:flex-row items-center justify-end gap-2.5 pt-2">
+                {/* Self Deletion Warning or Action Warning */}
+                {userToDelete.id === currentUser?.id ? (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center gap-2 font-medium">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>You cannot delete your own account.</span>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-rose-50/70 border border-rose-200/80 rounded-xl text-xs text-rose-800 flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-semibold block">This action cannot be undone.</span>
+                      <span className="text-rose-700/90 text-[11px] mt-0.5 block leading-relaxed">
+                        The user account and authentication records will be permanently removed.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                   <button
                     type="button"
-                    onClick={() => {
-                      const target = users.find(u => u.id === userToDelete.id);
-                      setUserToDelete(null);
-                      if (target) {
-                        handleOpenBanModal(target);
-                      }
-                    }}
-                    className="w-full sm:w-auto px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <Ban className="w-3.5 h-3.5" />
-                    <span>Block User Instead (Safe)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(`Please delete user: ${userToDelete.name} (ID: ${userToDelete.id}) from Supabase DB.`);
-                      triggerNotification('User info copied! Please share with Database Administrator.');
-                      setUserToDelete(null);
-                    }}
-                    className="w-full sm:w-auto px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-amber-600/20 cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Contact Administrator (Copy Details)</span>
-                  </button>
-                  <button
-                    type="button"
+                    disabled={isDeletingUser}
                     onClick={() => setUserToDelete(null)}
-                    className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                    className="px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-xl text-xs font-semibold text-slate-700 transition-colors cursor-pointer"
                   >
-                    Close
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isDeletingUser || userToDelete.id === currentUser?.id}
+                    onClick={confirmDeleteUser}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer ${
+                      userToDelete.id === currentUser?.id
+                        ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                        : 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-200'
+                    }`}
+                  >
+                    {isDeletingUser ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Deleting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete User</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
@@ -2462,7 +2674,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
                         Restricted
                       </span>
                     </div>
-                    <p className="text-xs text-slate-300 mt-0.5">సూపర్ అడ్మిన్ అనుమతి అవసరం (Ask Access Dialog)</p>
+                    <p className="text-xs text-slate-300 mt-0.5">Super Admin permission required (Access Request)</p>
                   </div>
                 </div>
                 <button
@@ -2539,7 +2751,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
                         <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
                           Reason for Deletion Request <span className="text-rose-600">* (Mandatory)</span>
                         </label>
-                        <span className="text-[11px] text-rose-600 font-semibold">కారణం తప్పనిసరి</span>
+                        <span className="text-[11px] text-rose-600 font-semibold">Mandatory</span>
                       </div>
                       <textarea
                         rows={3}

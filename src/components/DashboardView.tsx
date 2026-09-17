@@ -274,27 +274,7 @@ export default function DashboardView({
             </div>
           </div>
         </div>
-      ) : (
-        <div className="bg-gradient-to-r from-emerald-50/50 to-teal-50/20 border border-emerald-100 rounded-xl p-4 shadow-sm flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 shrink-0">
-              <CheckCircle2 className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-sm text-slate-900">Live Supabase Database Connected</span>
-                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">Reading and auditing records directly from your active Supabase database.</p>
-            </div>
-          </div>
-          <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400 font-mono">
-            <span>SSL SECURE</span>
-            <span className="text-slate-300">•</span>
-            <span>PRODUCTION STATE</span>
-          </div>
-        </div>
-      )}
+      ) : null}
 
       {/* Date Filter Active Notification Banner */}
       {dateRange && dateRange.preset !== 'all' && (

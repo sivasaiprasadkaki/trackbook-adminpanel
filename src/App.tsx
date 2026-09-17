@@ -372,7 +372,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans flex text-slate-800 animate-fade-in">
+    <div className="h-screen w-full bg-slate-50 font-sans flex text-slate-800 overflow-hidden">
       {/* Sidebar - fixed left panel on desktop, slide drawer on mobile */}
       <Sidebar
         currentTab={currentTab}
@@ -387,7 +387,7 @@ export default function App() {
       />
 
       {/* Main Content Stage */}
-      <div className="flex-1 pl-0 md:pl-[260px] min-h-screen flex flex-col transition-all duration-200 w-full overflow-x-hidden">
+      <div className="flex-1 md:pl-[260px] h-screen min-w-0 min-h-0 flex flex-col transition-all duration-200 w-full overflow-hidden">
         
         {/* Topbar Header */}
         <Topbar
@@ -408,8 +408,8 @@ export default function App() {
         />
 
         {/* Dynamic Panel view container */}
-        <main className="flex-1 w-full bg-slate-50 overflow-y-auto overflow-x-hidden">
-          <div className="w-full max-w-[1536px] mx-auto p-4 sm:p-6 lg:p-8 pt-20 md:pt-24">
+        <main className="flex-1 min-h-0 w-full bg-slate-50 overflow-y-auto overflow-x-hidden">
+          <div className="w-full max-w-[1536px] mx-auto p-4 sm:p-6 lg:p-8 pb-16">
             <motion.div
               key={currentTab}
               initial={{ opacity: 0, y: 8 }}

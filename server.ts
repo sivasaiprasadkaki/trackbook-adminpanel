@@ -1273,6 +1273,23 @@ app.get('/api/users', async (req, res) => {
       console.error('Error fetching profiles table:', e);
     }
 
+    // 3.2 Fetch admin_users table for authoritative Admin role verification
+    const adminRoleMap = new Map<string, string>();
+    try {
+      const { data: adminRows } = await supabase
+        .from('admin_users')
+        .select('id, username, role, status');
+      if (adminRows) {
+        adminRows.forEach((adm: any) => {
+          if (adm.id && (!adm.status || adm.status.toLowerCase() === 'active')) {
+            adminRoleMap.set(adm.id, adm.role === 'super_admin' ? 'Super Admin' : 'Admin');
+          }
+        });
+      }
+    } catch (e: any) {
+      console.warn('Could not fetch admin_users for role mapping:', e.message);
+    }
+
     // Build map of public users and profiles for merging
     const publicUsersMap = new Map<string, any>();
     publicUsers.forEach(u => {
@@ -1351,7 +1368,9 @@ app.get('/api/users', async (req, res) => {
 
         // Compute Role
         let role = 'User';
-        if (pubUser) {
+        if (adminRoleMap.has(u.id)) {
+          role = adminRoleMap.get(u.id)!;
+        } else if (pubUser) {
           role = pubUser.is_admin ? 'Admin' : (pubUser.role || 'User');
         } else if (profile) {
           role = profile.is_admin ? 'Admin' : (profile.role || 'User');
@@ -1428,7 +1447,12 @@ app.get('/api/users', async (req, res) => {
         }
         if (!name) name = 'Unknown User';
 
-        let role = u.is_admin ? 'Admin' : (u.role || 'User');
+        let role = 'User';
+        if (adminRoleMap.has(id)) {
+          role = adminRoleMap.get(id)!;
+        } else {
+          role = u.is_admin ? 'Admin' : (u.role || 'User');
+        }
         const isBanned = (u.status || '').toLowerCase() === 'banned';
         let rawStatus = isBanned ? 'Banned' : (u.status || 'Active');
         const latestEntry = userLatestEntryMap.get(id) || (name ? userLatestEntryMap.get(name.toLowerCase()) : null);
@@ -1532,8 +1556,10 @@ app.post('/api/admin/users/assign-role', requireSuperAdmin, async (req: any, res
       return res.status(400).json({ error: 'Username, password, full_name, and role are required.' });
     }
 
+    const cleanUsername = username.trim();
+    const cleanFullName = full_name.trim();
     const roleNormalized = role.toLowerCase().includes('super') ? 'super_admin' : 'admin';
-    const hashedPassword = await bcrypt.hash(password, 12);
+    const hashedPassword = await bcrypt.hash(password.trim(), 12);
     const nowStr = new Date().toISOString();
 
     const adminClient = getSupabaseAdmin();
@@ -1542,33 +1568,51 @@ app.post('/api/admin/users/assign-role', requireSuperAdmin, async (req: any, res
     }
 
     const targetId = userId || crypto.randomUUID();
-    const { data: existing } = await adminClient
-      .from('admin_users')
-      .select('id')
-      .or(`username.ilike.${username},id.eq.${targetId}`);
 
-    if (existing && existing.length > 0) {
+    // 1. Check if cleanUsername is already in use by a DIFFERENT admin
+    const { data: conflictByUsername } = await adminClient
+      .from('admin_users')
+      .select('id, username')
+      .ilike('username', cleanUsername)
+      .maybeSingle();
+
+    if (conflictByUsername && conflictByUsername.id !== targetId) {
+      return res.status(400).json({
+        error: `Username '${cleanUsername}' is already taken by another administrator. Please choose a unique username.`
+      });
+    }
+
+    // 2. Check if targetId already exists in admin_users
+    const { data: existingById } = await adminClient
+      .from('admin_users')
+      .select('id, username')
+      .eq('id', targetId)
+      .maybeSingle();
+
+    if (existingById) {
+      // Update THIS specific target admin user
       const { error: updErr } = await adminClient
         .from('admin_users')
         .update({
-          username,
+          username: cleanUsername,
           password_hash: hashedPassword,
-          full_name,
+          full_name: cleanFullName,
           role: roleNormalized,
           status: 'active',
           updated_at: nowStr
         })
-        .eq('id', existing[0].id);
+        .eq('id', targetId);
 
       if (updErr) {
         return res.status(500).json({ error: 'Failed to update admin user in database: ' + updErr.message });
       }
     } else {
+      // Insert NEW admin user record for targetId specifically
       const newAdmin = {
         id: targetId,
-        username,
+        username: cleanUsername,
         password_hash: hashedPassword,
-        full_name,
+        full_name: cleanFullName,
         role: roleNormalized,
         status: 'active',
         last_login_at: null,
@@ -1584,29 +1628,44 @@ app.post('/api/admin/users/assign-role', requireSuperAdmin, async (req: any, res
       }
     }
 
-    // If userId provided, sync user role in users table too
-    if (userId) {
-      try {
-        await adminClient.from('users').update({ role: roleNormalized === 'super_admin' ? 'Super Admin' : 'Admin' }).eq('id', userId);
-      } catch (e) {}
+    // 3. Sync public users table if account exists
+    try {
+      await adminClient
+        .from('users')
+        .update({
+          role: roleNormalized === 'super_admin' ? 'Super Admin' : 'Admin',
+          is_admin: true
+        })
+        .eq('id', targetId);
+    } catch (e: any) {
+      console.warn('Could not sync users table on role assignment:', e.message);
     }
 
+    // 4. Sync auth user metadata if auth account exists
+    try {
+      await adminClient.auth.admin.updateUserById(targetId, {
+        user_metadata: {
+          role: roleNormalized === 'super_admin' ? 'Super Admin' : 'Admin'
+        }
+      });
+    } catch (e: any) {}
+
     recordAuditLog({
-      user_name: full_name || username,
+      user_name: cleanFullName || cleanUsername,
       user_role: roleNormalized === 'super_admin' ? 'Super Admin' : 'Admin',
       user_type: 'Admin',
       action: 'Admin Access Role Assigned',
-      details: `Granted ${roleNormalized === 'super_admin' ? 'Super Admin' : 'Admin'} privileges to ${full_name} (@${username})`,
+      details: `Granted ${roleNormalized === 'super_admin' ? 'Super Admin' : 'Admin'} privileges to ${cleanFullName} (@${cleanUsername})`,
       format: 'System'
     });
 
     res.json({
       success: true,
-      message: `Role '${roleNormalized}' successfully assigned to ${full_name}`,
+      message: `Role '${roleNormalized}' successfully assigned to ${cleanFullName}`,
       user: {
         id: targetId,
-        username,
-        full_name,
+        username: cleanUsername,
+        full_name: cleanFullName,
         role: roleNormalized
       }
     });
@@ -1647,23 +1706,37 @@ app.put('/api/admin/users/:id', requireSuperAdmin, async (req: any, res: any) =>
       return res.status(400).json({ error: 'Username, full_name, and role are required.' });
     }
 
+    const cleanUsername = username.trim();
+    const cleanFullName = full_name.trim();
     const roleNormalized = role.toLowerCase().includes('super') ? 'super_admin' : 'admin';
     const nowStr = new Date().toISOString();
 
+    const adminClient = getSupabaseAdmin();
+    if (!adminClient) {
+      return res.status(500).json({ error: 'Database service unavailable' });
+    }
+
+    // Check if username taken by another admin
+    const { data: conflict } = await adminClient
+      .from('admin_users')
+      .select('id')
+      .ilike('username', cleanUsername)
+      .neq('id', id)
+      .maybeSingle();
+
+    if (conflict) {
+      return res.status(400).json({ error: `Username '${cleanUsername}' is already taken by another administrator.` });
+    }
+
     const updateFields: any = {
-      username: username.trim(),
-      full_name: full_name.trim(),
+      username: cleanUsername,
+      full_name: cleanFullName,
       role: roleNormalized,
       updated_at: nowStr
     };
 
     if (password && password.trim().length >= 4) {
       updateFields.password_hash = await bcrypt.hash(password.trim(), 12);
-    }
-
-    const adminClient = getSupabaseAdmin();
-    if (!adminClient) {
-      return res.status(500).json({ error: 'Database service unavailable' });
     }
 
     const { error } = await adminClient
@@ -1675,9 +1748,17 @@ app.put('/api/admin/users/:id', requireSuperAdmin, async (req: any, res: any) =>
       return res.status(500).json({ error: 'Failed to update admin user: ' + error.message });
     }
 
+    // Sync public.users
+    try {
+      await adminClient.from('users').update({
+        role: roleNormalized === 'super_admin' ? 'Super Admin' : 'Admin',
+        is_admin: true
+      }).eq('id', id);
+    } catch (e: any) {}
+
     res.json({
       success: true,
-      message: `Admin user '${username}' updated successfully.`
+      message: `Admin user '${cleanUsername}' updated successfully.`
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to update admin user: ' + err.message });
@@ -1687,7 +1768,6 @@ app.put('/api/admin/users/:id', requireSuperAdmin, async (req: any, res: any) =>
 app.delete('/api/admin/users/:id', requireSuperAdmin, async (req: any, res: any) => {
   try {
     const { id } = req.params;
-    const targetUsername = (req.query.username || req.body?.username || '').toString().trim();
     const adminClient = getSupabaseAdmin();
     const superAdminName = req.adminUser?.full_name || req.adminUser?.username || 'Super Admin';
 
@@ -1695,58 +1775,59 @@ app.delete('/api/admin/users/:id', requireSuperAdmin, async (req: any, res: any)
       return res.status(500).json({ error: 'Database service unavailable' });
     }
 
-    let foundAdminName = '';
-    let foundAdminUsername = targetUsername;
+    // Prevent self-deletion
+    if (id === req.adminUser?.id) {
+      return res.status(400).json({ error: 'You cannot delete your own account.' });
+    }
 
     // Locate admin details for audit logging before deletion
+    let foundAdminName = '';
+    let foundAdminUsername = '';
     try {
       const { data: dbAdmin } = await adminClient
         .from('admin_users')
         .select('id, username, full_name')
-        .or(`id.eq.${id}${targetUsername ? `,username.ilike.${targetUsername}` : ''}`);
-      if (dbAdmin && dbAdmin.length > 0) {
-        foundAdminName = dbAdmin[0].full_name;
-        foundAdminUsername = dbAdmin[0].username;
+        .eq('id', id)
+        .maybeSingle();
+      if (dbAdmin) {
+        foundAdminName = dbAdmin.full_name;
+        foundAdminUsername = dbAdmin.username;
       }
     } catch (e) {}
 
-    const usernameToRevoke = foundAdminUsername || targetUsername;
-
-    // Delete authoritatively from Supabase admin_users table
+    // Delete authoritatively from Supabase admin_users table for this ID only
     const { error: delErr } = await adminClient.from('admin_users').delete().eq('id', id);
     if (delErr) {
       console.error('[DELETE ADMIN] Error deleting admin from admin_users:', delErr.message);
       return res.status(500).json({ error: 'Failed to remove admin user from database: ' + delErr.message });
     }
 
-    if (usernameToRevoke) {
-      await adminClient.from('admin_users').delete().ilike('username', usernameToRevoke);
-    }
-
     // Demote role in public users table if account exists
     try {
-      if (id) {
-        await adminClient.from('users').update({ role: 'User' }).eq('id', id);
-      }
-      if (usernameToRevoke) {
-        await adminClient.from('users').update({ role: 'User' }).ilike('name', usernameToRevoke);
-      }
+      await adminClient.from('users').update({ role: 'User', is_admin: false }).eq('id', id);
     } catch (err: any) {
       console.warn('[DELETE ADMIN] Supabase user role demote warning:', err.message);
     }
+
+    // Demote auth user metadata if exists
+    try {
+      await adminClient.auth.admin.updateUserById(id, {
+        user_metadata: { role: 'User' }
+      });
+    } catch (e: any) {}
 
     recordAuditLog({
       user_name: superAdminName,
       user_role: 'Super Admin',
       user_type: 'Admin',
       action: 'Admin Access Revoked',
-      details: `Revoked admin privileges and deleted authorization record for ${foundAdminName || usernameToRevoke} (@${usernameToRevoke})`,
+      details: `Revoked admin privileges and deleted authorization record for ${foundAdminName || foundAdminUsername || id} (@${foundAdminUsername || id})`,
       format: 'System'
     });
 
     res.json({ 
       success: true, 
-      message: `Admin user '${usernameToRevoke || id}' deleted from admin_users and access revoked immediately.` 
+      message: `Admin user '${foundAdminUsername || id}' deleted from admin_users and access revoked immediately.` 
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to delete admin user: ' + err.message });
@@ -2005,10 +2086,44 @@ app.post('/api/audit-logs', async (req: any, res: any) => {
   }
 });
 
-app.post('/api/users', async (req, res) => {
-  const { email, role, status, phone, name, autoConfirm, created_by } = req.body;
-  if (!email) {
-    return res.status(400).json({ error: 'Missing required field: email' });
+app.post(['/api/users', '/api/admin/users'], async (req, res) => {
+  const { email, password, phone, name, fullName, created_by, role } = req.body;
+
+  const cleanName = (name || fullName || '').trim();
+  const cleanEmail = (email || '').trim().toLowerCase();
+  const cleanPassword = typeof password === 'string' ? password : '';
+  const cleanPhone = phone && typeof phone === 'string' && phone.trim() ? phone.trim() : null;
+  const requestedRole = (role || 'User').trim();
+  const isAdminRequested = requestedRole === 'Admin' || requestedRole === 'Super Admin';
+
+  // 1. Mandatory input validations
+  if (!cleanName) {
+    return res.status(400).json({ error: 'Full name is required.' });
+  }
+
+  if (!cleanEmail) {
+    return res.status(400).json({ error: 'Email address is required.' });
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(cleanEmail)) {
+    return res.status(400).json({ error: 'Please enter a valid email address.' });
+  }
+
+  if (!cleanPassword) {
+    return res.status(400).json({ error: 'Password is required.' });
+  }
+
+  if (cleanPassword.length < 6) {
+    return res.status(400).json({ error: 'Password should be at least 6 characters.' });
+  }
+
+  // Optional phone validation
+  if (cleanPhone) {
+    const digitsOnly = cleanPhone.replace(/\D/g, '');
+    if (digitsOnly.length < 5 || !/^[+0-9\s\-()]+$/.test(cleanPhone)) {
+      return res.status(400).json({ error: 'Please enter a valid phone number.' });
+    }
   }
 
   const supabase = getSupabaseAdmin();
@@ -2016,88 +2131,147 @@ app.post('/api/users', async (req, res) => {
     return res.status(500).json({ error: 'Supabase configuration is missing.' });
   }
 
-  const isEmailConfirm = autoConfirm !== undefined ? Boolean(autoConfirm) : (status?.toLowerCase() === 'pending' ? false : true);
-  const userStatus = isEmailConfirm ? 'active' : 'pending';
-
   const adminUser = (req as any).adminUser;
   const adminName = adminUser?.full_name || adminUser?.username || adminUser?.email || 'Admin';
   const adminRole = adminUser?.role === 'super_admin' ? 'Super Admin' : (adminUser?.role === 'admin' ? 'Admin' : 'Super Admin');
   const createdByVal = created_by || `${adminName} (${adminRole})`;
 
+  // Only Super Admin can register Super Admin or Admin users
+  const isSuperAdminCaller = adminUser?.role === 'super_admin';
+  if (isAdminRequested && !isSuperAdminCaller && adminUser?.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden: Insufficient privileges to assign Admin roles.' });
+  }
+  const effectiveRole = (!isSuperAdminCaller && requestedRole === 'Super Admin') ? 'Admin' : requestedRole;
+
   try {
-    let id = crypto.randomUUID();
+    // 2. Authoritative Supabase Auth user creation via Admin API (Server-Side)
+    const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
+      email: cleanEmail,
+      password: cleanPassword,
+      phone: cleanPhone || undefined,
+      email_confirm: true,
+      user_metadata: {
+        full_name: cleanName,
+        name: cleanName,
+        role: effectiveRole,
+        phone: cleanPhone || null
+      }
+    });
 
-    // Create user in Supabase Auth
-    if (supabase) {
-      try {
-        const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
-          email,
-          phone: phone || undefined,
-          email_confirm: isEmailConfirm,
-          user_metadata: {
-            full_name: name || undefined,
-            role: role || undefined
-          }
-        });
-        if (authErr) {
-          console.error('Auth signup failed, maybe user exists. Error:', authErr.message);
-        } else if (authData && authData.user) {
-          id = authData.user.id;
+    if (authErr) {
+      console.error('[USER REGISTER] Supabase auth.admin.createUser error:', authErr.message);
+      const errMsg = authErr.message.toLowerCase();
+      if (errMsg.includes('already') || errMsg.includes('registered') || errMsg.includes('exists')) {
+        return res.status(409).json({ error: 'A user with this email address already exists.' });
+      }
+      if (errMsg.includes('password') || errMsg.includes('weak') || errMsg.includes('characters')) {
+        return res.status(400).json({ error: authErr.message });
+      }
+      return res.status(400).json({ error: authErr.message });
+    }
+
+    if (!authData || !authData.user || !authData.user.id) {
+      return res.status(500).json({ error: 'Failed to create user in Supabase Authentication.' });
+    }
+
+    const authUserId = authData.user.id;
+
+    // 3. Insert into public.users table linking via Auth UUID
+    const { error: userInsertErr } = await supabase
+      .from('users')
+      .upsert([
+        {
+          id: authUserId,
+          email: cleanEmail,
+          role: effectiveRole,
+          is_admin: isAdminRequested,
+          status: 'active',
+          created_by: createdByVal
         }
-      } catch (e: any) {
-        console.error('Exception in auth signup:', e.message);
+      ]);
+
+    // 4. Insert/upsert into public.profiles table linking via Auth UUID
+    const { error: profInsertErr } = await supabase
+      .from('profiles')
+      .upsert([
+        {
+          id: authUserId,
+          email: cleanEmail,
+          full_name: cleanName,
+          phone: cleanPhone || null,
+          phone_verified: false,
+          updated_at: new Date().toISOString()
+        }
+      ]);
+
+    // 5. Atomic Consistency Check: If database insertion fails, rollback Auth user
+    if (userInsertErr || profInsertErr) {
+      console.error('[USER REGISTER] Database record creation failed:', userInsertErr || profInsertErr);
+      try {
+        await supabase.auth.admin.deleteUser(authUserId);
+        console.log('[USER REGISTER] Rolled back and deleted orphan auth user:', authUserId);
+      } catch (cleanupErr: any) {
+        console.error('[USER REGISTER] Failed to cleanup auth user after db error:', cleanupErr.message);
+      }
+      return res.status(500).json({
+        error: 'Account creation did not complete successfully. Database record could not be created.'
+      });
+    }
+
+    // 5.5 If Admin role requested, also authorize in admin_users
+    if (isAdminRequested) {
+      try {
+        let adminUsername = cleanName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12);
+        if (!adminUsername) adminUsername = cleanEmail.split('@')[0].replace(/[^a-z0-9]/g, '').slice(0, 12);
+        if (!adminUsername) adminUsername = `admin_${authUserId.slice(0, 5)}`;
+
+        const { data: userConflict } = await supabase.from('admin_users').select('id').ilike('username', adminUsername).maybeSingle();
+        if (userConflict) {
+          adminUsername = `${adminUsername}_${Math.floor(100 + Math.random() * 900)}`;
+        }
+
+        const pwHash = await bcrypt.hash(cleanPassword, 12);
+        await supabase.from('admin_users').insert([{
+          id: authUserId,
+          username: adminUsername,
+          password_hash: pwHash,
+          full_name: cleanName,
+          role: effectiveRole === 'Super Admin' ? 'super_admin' : 'admin',
+          status: 'active',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }]);
+      } catch (adminErr: any) {
+        console.warn('Could not insert admin_users record during registration:', adminErr.message);
       }
     }
 
-    const candidatePayloads = [
-      { id, email, name, full_name: name, is_admin: role === 'Admin', role: role || 'User', status: userStatus, created_by: createdByVal, phone: phone || null },
-      { id, email, name, is_admin: role === 'Admin', status: userStatus, created_by: createdByVal },
-      { id, email, is_admin: role === 'Admin', status: userStatus }
-    ];
-
-    let lastError: any = null;
-    for (const payload of candidatePayloads) {
-      const cleanPayload = Object.fromEntries(
-        Object.entries(payload).filter(([_, v]) => v !== undefined && v !== null)
-      );
-      const { error } = await supabase.from('users').upsert([cleanPayload]);
-      if (!error) {
-        lastError = null;
-        break;
-      } else {
-        lastError = error;
-      }
-    }
-
-    if (lastError) throw lastError;
-
-    const emailPrefix = email.split('@')[0];
-    const computedName = name || emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
-
+    // 6. Record Audit Log (Password is NEVER logged)
     recordAuditLog({
-      user_name: computedName,
-      user_role: role || 'Customer',
-      user_type: (role || '').toLowerCase().includes('admin') ? 'Admin' : 'Customer',
-      action: 'Customer Account Created',
-      details: `Registered new user account: ${computedName} (${email}) - Status: ${isEmailConfirm ? 'Active' : 'Pending'}`,
+      user_name: cleanName,
+      user_role: effectiveRole,
+      user_type: isAdminRequested ? 'Admin' : 'Customer',
+      action: isAdminRequested ? 'Admin Account Registered' : 'Customer Account Created',
+      details: `Registered new account: ${cleanName} (${cleanEmail}) with role ${effectiveRole}`,
       format: 'System'
     });
 
-    res.status(201).json({
-      id,
-      name: computedName,
-      role: role || 'User',
-      email,
-      phone: phone || '',
-      status: isEmailConfirm ? 'Active' : 'Pending',
+    // 7. Success response (Raw password is NEVER returned in response)
+    return res.status(201).json({
+      id: authUserId,
+      name: cleanName,
+      role: effectiveRole,
+      email: cleanEmail,
+      phone: cleanPhone || '',
+      status: 'Active',
       createdBy: createdByVal,
       joinedDate: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
       lastLogin: 'Never',
       avatarUrl: ''
     });
   } catch (err: any) {
-    console.error('Supabase user create error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[USER REGISTER] Exception during registration:', err);
+    return res.status(500).json({ error: err.message || 'Internal server error during user registration.' });
   }
 });
 
@@ -2140,7 +2314,10 @@ app.put('/api/users/:id', async (req, res) => {
     // 2. Update public.users table
     const updatePayload: any = {};
     if (email !== undefined) updatePayload.email = email;
-    if (role !== undefined) updatePayload.is_admin = (role === 'Admin');
+    if (role !== undefined) {
+      updatePayload.role = role;
+      updatePayload.is_admin = (role === 'Admin' || role === 'Super Admin');
+    }
     if (status !== undefined) updatePayload.status = status.toLowerCase();
 
     const { error } = await supabase
@@ -2149,6 +2326,64 @@ app.put('/api/users/:id', async (req, res) => {
       .eq('id', id);
 
     if (error) throw error;
+
+    // 2.5 Sync admin_users authorization table if role was modified by Super Admin
+    if (isSuperAdminCaller && role !== undefined) {
+      const roleLower = role.toLowerCase();
+      if (roleLower.includes('admin') || role === 'Super Admin') {
+        const roleNormalized = roleLower.includes('super') ? 'super_admin' : 'admin';
+        const { data: existingAdmin } = await supabase
+          .from('admin_users')
+          .select('id, username')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (existingAdmin) {
+          await supabase.from('admin_users').update({
+            role: roleNormalized,
+            status: 'active',
+            updated_at: new Date().toISOString()
+          }).eq('id', id);
+        } else {
+          let adminUsername = (name || email || 'admin').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12);
+          if (!adminUsername) adminUsername = `admin_${id.slice(0, 5)}`;
+          const { data: userConflict } = await supabase.from('admin_users').select('id').ilike('username', adminUsername).maybeSingle();
+          if (userConflict) {
+            adminUsername = `${adminUsername}_${Math.floor(100 + Math.random() * 900)}`;
+          }
+          const defaultPwHash = await bcrypt.hash(`Admin@${id.slice(0, 6)}!`, 12);
+          await supabase.from('admin_users').insert([{
+            id,
+            username: adminUsername,
+            password_hash: defaultPwHash,
+            full_name: name || email || 'Admin User',
+            role: roleNormalized,
+            status: 'active',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }]);
+        }
+      } else {
+        // Demoting to non-admin
+        if (id === (req as any).adminUser?.id) {
+          return res.status(400).json({ error: 'You cannot demote your own account.' });
+        }
+        await supabase.from('admin_users').delete().eq('id', id);
+      }
+    }
+
+    // 3. Update public.profiles table
+    if (name !== undefined || phone !== undefined || email !== undefined) {
+      try {
+        const profUpdate: any = { updated_at: new Date().toISOString() };
+        if (name !== undefined) profUpdate.full_name = name;
+        if (email !== undefined) profUpdate.email = email;
+        if (phone !== undefined) profUpdate.phone = phone || null;
+        await supabase.from('profiles').update(profUpdate).eq('id', id);
+      } catch (profErr: any) {
+        console.warn('Could not update profiles table for user', id, profErr.message);
+      }
+    }
 
     const emailPrefix = (email || 'user').split('@')[0];
     const computedName = name || emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
@@ -2179,12 +2414,115 @@ app.put('/api/users/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', requireSuperAdmin, async (req, res) => {
+app.delete('/api/users/:id', requireSuperAdmin, async (req: any, res: any) => {
   const { id } = req.params;
-  console.warn(`[USER DELETE] Direct deletion request rejected for user ID: ${id}. Users must be deleted directly from DB.`);
-  return res.status(403).json({
-    error: 'Direct user deletion from Admin Panel is disabled for security and ledger integrity. Users must be deleted directly from the Supabase Database (DB lonchi delete cheyyali).'
-  });
+  const adminClient = getSupabaseAdmin();
+  if (!adminClient) {
+    return res.status(500).json({ error: 'Database service unavailable' });
+  }
+
+  // Prevent self-deletion
+  if (id === req.adminUser?.id) {
+    return res.status(400).json({ error: 'You cannot delete your own account.' });
+  }
+
+  try {
+    let userEmail = '';
+    let userName = '';
+
+    // Check auth user
+    try {
+      const { data: authUser } = await adminClient.auth.admin.getUserById(id);
+      if (authUser?.user) {
+        userEmail = authUser.user.email || '';
+        userName = authUser.user.user_metadata?.full_name || authUser.user.user_metadata?.name || '';
+      }
+    } catch (e: any) {
+      console.warn('Could not get auth user:', e.message);
+    }
+
+    // Check if target matches current super admin email
+    if (userEmail && req.adminUser?.username && userEmail.toLowerCase() === req.adminUser.username.toLowerCase()) {
+      return res.status(400).json({ error: 'You cannot delete your own account.' });
+    }
+
+    // Check admin_users
+    try {
+      const { data: adminRecord } = await adminClient
+        .from('admin_users')
+        .select('id, username, role, full_name')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (adminRecord) {
+        if (adminRecord.id === req.adminUser?.id) {
+          return res.status(400).json({ error: 'You cannot delete your own account.' });
+        }
+        userName = adminRecord.full_name || adminRecord.username || userName;
+        await adminClient.from('admin_users').delete().eq('id', id);
+      }
+    } catch (e: any) {
+      console.warn('Admin record check error:', e.message);
+    }
+
+    // Delete from Supabase Auth
+    try {
+      await adminClient.auth.admin.deleteUser(id);
+    } catch (authDelErr: any) {
+      console.warn('Notice: Auth user deletion error/warning:', authDelErr.message);
+    }
+
+    // Delete from profiles
+    try {
+      await adminClient.from('profiles').delete().eq('id', id);
+    } catch (profDelErr: any) {
+      console.warn('Notice: Profiles deletion error/warning:', profDelErr.message);
+    }
+
+    // Delete or anonymize in public.users
+    try {
+      const { error: pubDelErr } = await adminClient.from('users').delete().eq('id', id);
+      if (pubDelErr) {
+        console.warn('Preserving ledger records for user:', id, pubDelErr.message);
+        await adminClient.from('users').update({
+          status: 'deleted',
+          role: 'User',
+          is_admin: false,
+          name: '[Deleted User]'
+        }).eq('id', id);
+      }
+    } catch (pubErr: any) {
+      console.warn('Public users delete error:', pubErr.message);
+    }
+
+    // Invalidate presence
+    if (id) activeUserPresence.delete(id);
+    if (userEmail) activeUserPresence.delete(userEmail.toLowerCase());
+    if (userName) activeUserPresence.delete(userName.toLowerCase());
+
+    // Record audit log
+    const superAdminName = req.adminUser?.full_name || req.adminUser?.username || 'Super Admin';
+    try {
+      recordAuditLog({
+        user_name: superAdminName,
+        user_role: 'Super Admin',
+        user_type: 'Admin',
+        action: 'User Account Deleted',
+        details: `Super Admin permanently deleted user account '${userName || id}' (${userEmail || id}). Auth revoked.`,
+        format: 'System'
+      });
+    } catch (auditErr: any) {
+      console.warn('Audit log write error:', auditErr.message);
+    }
+
+    return res.json({
+      success: true,
+      message: `User '${userName || id}' was permanently deleted.`
+    });
+  } catch (err: any) {
+    console.error('Failed to delete user:', err);
+    return res.status(500).json({ error: 'Failed to delete user: ' + err.message });
+  }
 });
 
 // Ban / Block user in Supabase Authentication (Accessible to Admins & Super Admins)
@@ -2193,7 +2531,7 @@ app.post(['/api/users/:id/ban', '/api/users/:id/block'], async (req: any, res: a
   const { duration, unit, reason } = req.body;
 
   if (!reason || typeof reason !== 'string' || !reason.trim()) {
-    return res.status(400).json({ error: 'A mandatory reason is required to block this user (కారణం తప్పనిసరి).' });
+    return res.status(400).json({ error: 'A mandatory reason is required to block this user.' });
   }
 
   const supabase = getSupabaseAdmin();
