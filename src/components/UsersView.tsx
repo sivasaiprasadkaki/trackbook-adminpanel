@@ -26,8 +26,12 @@ import {
   ShieldAlert,
   Clock,
   AlertTriangle,
-  Unlock
+  Unlock,
+  Lock,
+  Send,
+  Database
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { User } from '../types';
 import { DateRangeFilter, isDateInRange } from '../utils/dateUtils';
 
@@ -36,16 +40,25 @@ const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(inp
 interface UsersViewProps {
   onRefreshStats?: () => void;
   isSuperAdmin?: boolean;
+  currentUser?: any;
   dateRange?: DateRangeFilter;
 }
 
-export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRange }: UsersViewProps) {
+export default function UsersView({ onRefreshStats, isSuperAdmin = false, currentUser, dateRange }: UsersViewProps) {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
   const [activeTab, setActiveTab] = useState<'all' | 'live' | 'today' | 'admins'>('all');
+
+  // Super Admin Access Request Dialog State (for user deletion by non-superadmins)
+  const [isAskAccessModalOpen, setIsAskAccessModalOpen] = useState(false);
+  const [accessTargetUser, setAccessTargetUser] = useState<{ id: string; name: string; email?: string } | null>(null);
+  const [accessReason, setAccessReason] = useState('');
+  const [accessReasonError, setAccessReasonError] = useState('');
+  const [isSubmittingAccess, setIsSubmittingAccess] = useState(false);
+  const [accessSubmittedSuccess, setAccessSubmittedSuccess] = useState(false);
 
   // Form State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -70,6 +83,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
   const [banDurationValue, setBanDurationValue] = useState<number>(24);
   const [banDurationUnit, setBanDurationUnit] = useState<'hours' | 'days'>('hours');
   const [banReason, setBanReason] = useState('');
+  const [banReasonError, setBanReasonError] = useState('');
   const [banLoading, setBanLoading] = useState(false);
   const [unbanLoading, setUnbanLoading] = useState(false);
 
@@ -99,6 +113,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
 
   // Delete modal state (replaces iframe-blocked window.confirm)
   const [userToDelete, setUserToDelete] = useState<{ id: string; name: string; email?: string } | null>(null);
+  const [copiedUserId, setCopiedUserId] = useState<string | null>(null);
   const [adminToDelete, setAdminToDelete] = useState<{ id: string; username: string } | null>(null);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
 
@@ -214,12 +229,14 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
     if (!adminToDelete) return;
     setIsDeletingUser(true);
     try {
-      const res = await fetch(`/api/admin/users/${adminToDelete.id}`, {
-        method: 'DELETE'
+      const res = await fetch(`/api/admin/users/${adminToDelete.id}?username=${encodeURIComponent(adminToDelete.username)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: adminToDelete.username })
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        triggerNotification(`Admin user '${adminToDelete.username}' access revoked.`);
+        triggerNotification(`Admin user '${adminToDelete.username}' access revoked and credentials permanently deactivated.`);
         setAdminToDelete(null);
         fetchAdminUsers();
         fetchUsers();
@@ -457,7 +474,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
     }
   };
 
-  // Delete User
+  // Delete User: UI direct deletion is prohibited; must delete directly from Supabase DB
   const handleDelete = (id: string, name?: string, email?: string) => {
     const u = users.find(x => x.id === id);
     setUserToDelete({
@@ -465,6 +482,41 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
       name: name || u?.name || 'this user',
       email: email || u?.email || ''
     });
+  };
+
+  const handleSubmitAccessRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!accessReason.trim()) {
+      setAccessReasonError('Please provide a reason for requesting deletion access (కారణం తప్పనిసరిగా రాయాలి).');
+      return;
+    }
+    if (!accessTargetUser) return;
+
+    setIsSubmittingAccess(true);
+    setAccessReasonError('');
+    try {
+      const adminCallerName = currentUser?.full_name || currentUser?.username || 'Admin';
+      const res = await fetch('/api/users/access-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target: `Delete User: ${accessTargetUser.name} (${accessTargetUser.email || accessTargetUser.id})`,
+          reason: accessReason.trim(),
+          message: `Admin ${adminCallerName} requested permission to delete user "${accessTargetUser.name}" (${accessTargetUser.email || accessTargetUser.id}). Reason: ${accessReason.trim()}`
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setAccessSubmittedSuccess(true);
+        triggerNotification('Access request successfully sent to Super Administrator (Siva Sai Prasad).');
+      } else {
+        setAccessReasonError(data.error || 'Failed to submit request to Super Administrator.');
+      }
+    } catch (err: any) {
+      setAccessReasonError('Network error while submitting access request.');
+    } finally {
+      setIsSubmittingAccess(false);
+    }
   };
 
   const confirmDeleteUser = async () => {
@@ -496,17 +548,23 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
     setBanDurationValue(24);
     setBanDurationUnit('hours');
     setBanReason('');
+    setBanReasonError('');
     setIsBanModalOpen(true);
   };
 
-  // Submit Ban User in Supabase Auth
+  // Submit Ban User in Supabase Auth (Mandatory Reason Required)
   const handleConfirmBan = async () => {
     if (!selectedUserForBan) return;
+    if (!banReason.trim()) {
+      setBanReasonError('A valid reason is required to block this user (కారణం తప్పనిసరిగా రాయాలి).');
+      return;
+    }
     setBanLoading(true);
+    setBanReasonError('');
 
     try {
       let payload: any = {
-        reason: banReason.trim() || 'Admin manual ban'
+        reason: banReason.trim()
       };
 
       if (banPreset === 'permanent') {
@@ -1261,11 +1319,12 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                       </button>
                     )}
 
-                    {/* Delete action */}
+                    {/* Delete action: Strictly only visible to Super Admin. Regular Admin only has Edit and Block */}
                     {isSuperAdmin && (
                       <button
                         onClick={() => handleDelete(user.id, user.name, user.email)}
-                        className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                        className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                        title="Delete user from system"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                         <span>Delete</span>
@@ -1427,7 +1486,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                             </button>
                           )}
 
-                          {/* Delete action */}
+                          {/* Delete action: Strictly only visible to Super Admin. Regular admin only has Edit and Block */}
                           {isSuperAdmin && (
                             <button
                               onClick={() => handleDelete(user.id, user.name, user.email)}
@@ -1561,7 +1620,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                   >
                     <option value="User">User</option>
                     <option value="Manager">Manager</option>
-                    <option value="Admin">Admin</option>
+                    {isSuperAdmin && <option value="Admin">Admin</option>}
                   </select>
                 </div>
 
@@ -2032,18 +2091,37 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                 </div>
               </div>
 
-              {/* Reason Note */}
+              {/* Reason Note (Mandatory) */}
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                  Reason for Ban (Optional)
-                </label>
-                <input
-                  type="text"
+                <div className="flex justify-between items-center mb-1.5">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
+                    Reason for Block <span className="text-rose-600">* (Mandatory)</span>
+                  </label>
+                  <span className="text-[11px] text-rose-600 font-semibold">కారణం తప్పనిసరి</span>
+                </div>
+                <textarea
+                  rows={2}
                   value={banReason}
-                  onChange={(e) => setBanReason(e.target.value)}
-                  placeholder="e.g. Repeated policy violation, Suspicious transaction activity"
-                  className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-rose-500"
+                  onChange={(e) => {
+                    setBanReason(e.target.value);
+                    if (e.target.value.trim()) setBanReasonError('');
+                  }}
+                  placeholder="Enter the specific reason for blocking this user (e.g. Policy violation, suspicious cashbook transactions, unverified ID)..."
+                  className={`w-full p-2.5 border rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-none transition-all ${
+                    banReasonError ? 'border-rose-500 bg-rose-50/20 ring-2 ring-rose-200' : 'border-slate-200 focus:border-rose-500'
+                  }`}
                 />
+                {banReasonError && (
+                  <p className="text-xs text-rose-600 mt-1 font-medium flex items-center gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{banReasonError}</span>
+                  </p>
+                )}
+                {!banReason.trim() && !banReasonError && (
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    You must write a reason before this user can be blocked.
+                  </p>
+                )}
               </div>
 
               {/* Action Buttons */}
@@ -2061,19 +2139,24 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
                 </button>
                 <button
                   type="button"
-                  disabled={banLoading}
+                  disabled={banLoading || !banReason.trim()}
                   onClick={handleConfirmBan}
-                  className="flex-1 h-11 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-sm font-bold transition-all shadow-md active:scale-98 cursor-pointer flex items-center justify-center gap-2"
+                  title={!banReason.trim() ? "Please write a reason to block this user (కారణం తప్పనిసరి)" : "Confirm Ban User"}
+                  className={`flex-1 h-11 rounded-xl text-sm font-bold transition-all shadow-md active:scale-98 cursor-pointer flex items-center justify-center gap-2 ${
+                    !banReason.trim()
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                      : 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-200'
+                  }`}
                 >
                   {banLoading ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Banning in Supabase...</span>
+                      <span>Blocking in Supabase...</span>
                     </>
                   ) : (
                     <>
                       <Ban className="w-4 h-4" />
-                      <span>Confirm Ban User</span>
+                      <span>Confirm Block User</span>
                     </>
                   )}
                 </button>
@@ -2188,138 +2271,421 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = true, dateRan
         </div>
       )}
 
-      {/* User Deletion Confirmation Modal */}
-      {userToDelete && (
-        <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            <div className="bg-rose-600 text-white px-6 py-4 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
-                  <Trash2 className="w-4 h-4 text-white" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-base leading-tight">Delete User Account</h3>
-                  <p className="text-[11px] text-rose-100">Permanent registry deletion</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setUserToDelete(null)}
-                disabled={isDeletingUser}
-                className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      {/* User Deletion Prohibited - DB lonchi delete cheyyali Modal */}
+      <AnimatePresence>
+        {userToDelete && (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+            {/* Smooth Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.25 }}
+              onClick={() => setUserToDelete(null)}
+              className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm"
+            />
 
-            <div className="p-6 space-y-4">
-              <p className="text-sm text-slate-600 leading-relaxed">
-                Are you sure you want to permanently delete user <strong className="text-slate-900">{userToDelete.name}</strong>
-                {userToDelete.email ? <span className="text-slate-500"> ({userToDelete.email})</span> : ''}?
-              </p>
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <span>This will remove their profile and authentication credentials from the registry. This action cannot be undone.</span>
-              </div>
-
-              <div className="flex items-center justify-end gap-2.5 pt-2">
+            {/* Smooth Animated Modal Dialog */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', duration: 0.35, bounce: 0.12 }}
+              className="relative z-10 bg-white border border-slate-200/90 rounded-3xl max-w-lg w-full shadow-2xl overflow-hidden"
+            >
+              {/* Header */}
+              <div className="bg-gradient-to-r from-amber-600 via-amber-700 to-amber-800 text-white px-6 py-5 flex items-center justify-between border-b border-amber-600/30">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center text-white shadow-inner">
+                    <Database className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-bold text-lg leading-tight font-display tracking-tight text-white">
+                        DB lonchi delete cheyyali
+                      </h3>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase bg-white/20 text-amber-100 border border-white/30">
+                        DB Action
+                      </span>
+                    </div>
+                    <p className="text-xs text-amber-100/90 font-medium mt-0.5">Contact Administrator</p>
+                  </div>
+                </div>
                 <button
                   type="button"
                   onClick={() => setUserToDelete(null)}
-                  disabled={isDeletingUser}
-                  className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/25 text-white flex items-center justify-center transition-colors cursor-pointer"
                 >
-                  Cancel
+                  <X className="w-4 h-4" />
                 </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                {/* Primary Alert Card */}
+                <div className="p-4 bg-amber-50 border border-amber-200/90 rounded-2xl text-xs text-amber-950 leading-relaxed space-y-2.5 shadow-xs">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+                      <AlertTriangle className="w-4.5 h-4.5 text-amber-600" />
+                    </div>
+                    <div>
+                      <strong className="text-sm font-bold text-amber-900 block mb-1">
+                        DB lonchi delete cheyyali • Contact Administrator
+                      </strong>
+                      <p className="text-amber-900/80 text-[12px] leading-relaxed">
+                        Super Admin: ఈ అకౌంట్‌ను ప్యానెల్ నుండి నేరుగా తొలగించడం సాధ్యపడదు. Transactions, Cashbooks మరియు Financial Audit Records integrity కోసం, ఈ అకౌంట్‌ను <strong>DB lonchi delete cheyyali</strong>. Please contact administrator to delete directly from the Supabase database.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="pt-2.5 border-t border-amber-200/80 text-amber-900 text-xs font-semibold flex items-center gap-2">
+                    <Database className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span>Please contact administrator to perform direct database deletion in Supabase.</span>
+                  </div>
+                </div>
+
+                {/* Target User Info Card */}
+                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-500 font-medium">Target Account:</span>
+                    <span className="font-bold text-slate-900">{userToDelete.name}</span>
+                  </div>
+                  {userToDelete.email && (
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-500 font-medium">Email:</span>
+                      <span className="font-mono text-slate-700">{userToDelete.email}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-200">
+                    <span className="text-slate-500 font-medium">Supabase User ID:</span>
+                    <div className="flex items-center gap-1.5">
+                      <code className="px-2 py-0.5 bg-white border border-slate-200 rounded-lg text-[11px] font-mono text-slate-800 font-semibold select-all">
+                        {userToDelete.id}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(userToDelete.id);
+                          setCopiedUserId(userToDelete.id);
+                          setTimeout(() => setCopiedUserId(null), 2500);
+                        }}
+                        className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                        title="Copy User ID"
+                      >
+                        {copiedUserId === userToDelete.id ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-slate-600 bg-white p-2.5 rounded-xl border border-slate-100 flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+                    <span><strong>Supabase DB Path:</strong> Authentication &rarr; Users &rarr; Delete user record</span>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex flex-col sm:flex-row items-center justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = users.find(u => u.id === userToDelete.id);
+                      setUserToDelete(null);
+                      if (target) {
+                        handleOpenBanModal(target);
+                      }
+                    }}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Ban className="w-3.5 h-3.5" />
+                    <span>Block User Instead (Safe)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(`Please delete user: ${userToDelete.name} (ID: ${userToDelete.id}) from Supabase DB.`);
+                      triggerNotification('User info copied! Please share with Database Administrator.');
+                      setUserToDelete(null);
+                    }}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-amber-600/20 cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Contact Administrator (Copy Details)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUserToDelete(null)}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Super Admin Access Request Dialog Box for Non-Super Admins */}
+      <AnimatePresence>
+        {isAskAccessModalOpen && accessTargetUser && (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              onClick={() => {
+                setIsAskAccessModalOpen(false);
+                setAccessTargetUser(null);
+                setAccessSubmittedSuccess(false);
+              }}
+              className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 12 }}
+              transition={{ type: 'spring', duration: 0.35, bounce: 0.12 }}
+              className="relative z-10 bg-white border border-slate-200 rounded-3xl max-w-lg w-full shadow-2xl overflow-hidden"
+            >
+              {/* Header */}
+              <div className="bg-gradient-to-r from-amber-950 via-slate-900 to-slate-900 text-white px-6 py-5 flex items-center justify-between border-b border-amber-500/20">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center shrink-0">
+                    <ShieldAlert className="w-5 h-5 text-amber-400" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-bold text-base leading-tight">Super Admin Access Required</h3>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                        Restricted
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-0.5">సూపర్ అడ్మిన్ అనుమతి అవసరం (Ask Access Dialog)</p>
+                  </div>
+                </div>
                 <button
                   type="button"
-                  onClick={confirmDeleteUser}
-                  disabled={isDeletingUser}
-                  className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 shadow-md transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  onClick={() => {
+                    setIsAskAccessModalOpen(false);
+                    setAccessTargetUser(null);
+                    setAccessSubmittedSuccess(false);
+                  }}
+                  className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
                 >
-                  {isDeletingUser ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Deleting...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Confirm Delete</span>
-                    </>
-                  )}
+                  <X className="w-4 h-4" />
                 </button>
               </div>
-            </div>
+
+              {/* Content */}
+              <div className="p-6 space-y-4">
+                {accessSubmittedSuccess ? (
+                  <div className="space-y-4 py-2 text-center">
+                    <div className="w-14 h-14 bg-emerald-100 rounded-full flex items-center justify-center mx-auto text-emerald-600">
+                      <CheckCircle2 className="w-8 h-8" />
+                    </div>
+                    <div>
+                      <h4 className="text-base font-bold text-slate-900">Access Request Submitted!</h4>
+                      <p className="text-xs text-slate-600 mt-1 max-w-sm mx-auto leading-relaxed">
+                        Your deletion request for <strong className="text-slate-900">{accessTargetUser.name}</strong> has been forwarded to the Super Administrator (Siva Sai Prasad).
+                      </p>
+                    </div>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-left text-xs space-y-1">
+                      <div className="text-slate-500 font-medium">Target User: <span className="font-semibold text-slate-800">{accessTargetUser.name}</span></div>
+                      {accessTargetUser.email && <div className="text-slate-500">Email: <span className="font-mono text-slate-700">{accessTargetUser.email}</span></div>}
+                      <div className="text-slate-500">Status: <span className="inline-flex items-center gap-1 text-amber-600 font-semibold font-mono uppercase text-[10px]">● Pending Super Admin Review</span></div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAskAccessModalOpen(false);
+                        setAccessTargetUser(null);
+                        setAccessSubmittedSuccess(false);
+                      }}
+                      className="w-full h-10 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
+                    >
+                      Close
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleSubmitAccessRequest} className="space-y-4">
+                    <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl text-xs text-amber-900 leading-relaxed">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <strong className="font-semibold">Role Access Notice:</strong> As an Administrator, your role is granted access to <strong>Edit</strong> and <strong>Block</strong> user accounts. Permanent account deletion is restricted exclusively to the <strong>Super Administrator</strong>.
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Target User Card */}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                      <div>
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Target User To Delete</div>
+                        <div className="text-sm font-bold text-slate-900 mt-0.5">{accessTargetUser.name}</div>
+                        {accessTargetUser.email && (
+                          <div className="text-xs text-slate-500 font-mono">{accessTargetUser.email}</div>
+                        )}
+                      </div>
+                      <span className="px-2.5 py-1 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold">
+                        Delete Request
+                      </span>
+                    </div>
+
+                    {/* Reason Field (Mandatory) */}
+                    <div>
+                      <div className="flex justify-between items-center mb-1.5">
+                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
+                          Reason for Deletion Request <span className="text-rose-600">* (Mandatory)</span>
+                        </label>
+                        <span className="text-[11px] text-rose-600 font-semibold">కారణం తప్పనిసరి</span>
+                      </div>
+                      <textarea
+                        rows={3}
+                        value={accessReason}
+                        onChange={(e) => {
+                          setAccessReason(e.target.value);
+                          if (e.target.value.trim()) setAccessReasonError('');
+                        }}
+                        placeholder="Explain to Super Admin why this user account needs to be permanently deleted..."
+                        className={`w-full p-3 border rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none transition-all ${
+                          accessReasonError ? 'border-rose-500 bg-rose-50/20 ring-2 ring-rose-200' : 'border-slate-200 focus:border-amber-500 focus:ring-2 focus:ring-amber-100'
+                        }`}
+                      />
+                      {accessReasonError && (
+                        <p className="text-xs text-rose-600 mt-1 font-medium flex items-center gap-1">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{accessReasonError}</span>
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Modal Footer */}
+                    <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAskAccessModalOpen(false);
+                          setAccessTargetUser(null);
+                          setAccessSubmittedSuccess(false);
+                        }}
+                        className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSubmittingAccess || !accessReason.trim()}
+                        className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer flex items-center gap-1.5 ${
+                          isSubmittingAccess || !accessReason.trim()
+                            ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                            : 'bg-amber-600 hover:bg-amber-700 text-white shadow-amber-200'
+                        }`}
+                      >
+                        {isSubmittingAccess ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Sending Request...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-3.5 h-3.5" />
+                            <span>Ask Access from Super Admin</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            </motion.div>
           </div>
-        </div>
-      )}
+        )}
+      </AnimatePresence>
 
-      {/* Admin Revoke Confirmation Modal */}
-      {adminToDelete && (
-        <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            <div className="bg-rose-600 text-white px-6 py-4 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
-                  <Trash2 className="w-4 h-4 text-white" />
+      <AnimatePresence>
+        {adminToDelete && (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              onClick={() => !isDeletingUser && setAdminToDelete(null)}
+              className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 12 }}
+              transition={{ type: 'spring', duration: 0.35, bounce: 0.12 }}
+              className="relative z-10 bg-white border border-slate-200 rounded-3xl max-w-md w-full shadow-2xl overflow-hidden"
+            >
+              <div className="bg-rose-600 text-white px-6 py-4 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
+                    <Trash2 className="w-4 h-4 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base leading-tight">Revoke Admin Access</h3>
+                    <p className="text-[11px] text-rose-100">Remove administrator privileges</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-bold text-base leading-tight">Revoke Admin Access</h3>
-                  <p className="text-[11px] text-rose-100">Remove administrator privileges</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAdminToDelete(null)}
-                disabled={isDeletingUser}
-                className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <p className="text-sm text-slate-600 leading-relaxed">
-                Are you sure you want to revoke admin portal access for <strong className="text-slate-900">{adminToDelete.username}</strong>?
-              </p>
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <span>This user will no longer be able to log in to the TrackBook Admin Portal.</span>
-              </div>
-
-              <div className="flex items-center justify-end gap-2.5 pt-2">
                 <button
                   type="button"
                   onClick={() => setAdminToDelete(null)}
                   disabled={isDeletingUser}
-                  className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={confirmDeleteAdmin}
-                  disabled={isDeletingUser}
-                  className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 shadow-md transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  {isDeletingUser ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Revoking...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Revoke Access</span>
-                    </>
-                  )}
+                  <X className="w-4 h-4" />
                 </button>
               </div>
-            </div>
+
+              <div className="p-6 space-y-4">
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  Are you sure you want to revoke admin portal access for <strong className="text-slate-900">{adminToDelete.username}</strong>?
+                </p>
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <strong>Security Enforced:</strong> This administrator account will be deleted and its login credentials permanently deactivated. Any future login attempts with these credentials will be strictly blocked.
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setAdminToDelete(null)}
+                    disabled={isDeletingUser}
+                    className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmDeleteAdmin}
+                    disabled={isDeletingUser}
+                    className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 shadow-md transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {isDeletingUser ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Revoking...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Revoke Admin Access</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
           </div>
-        </div>
-      )}
+        )}
+      </AnimatePresence>
     </div>
   );
 }

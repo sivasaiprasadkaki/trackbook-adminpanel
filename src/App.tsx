@@ -14,6 +14,7 @@ import SplashScreen from './components/SplashScreen';
 import { Entry } from './types';
 import { RefreshCw } from 'lucide-react';
 import { DateRangeFilter, getPresetDateRange } from './utils/dateUtils';
+import { motion } from 'motion/react';
 
 export default function App() {
   const location = useLocation();
@@ -154,16 +155,37 @@ export default function App() {
     };
   }, [currentTab, isAuthenticated, currentUser]);
 
-  // Presence heartbeat for real-time live user detection
+  // Session revocation listener for immediate UI response
+  useEffect(() => {
+    const handleRevocation = () => {
+      setIsAuthenticated(false);
+      setCurrentUser(null);
+      if (location.pathname !== '/login') {
+        navigate('/login', { replace: true });
+      }
+    };
+    window.addEventListener('trackbook:session_revoked', handleRevocation);
+    return () => window.removeEventListener('trackbook:session_revoked', handleRevocation);
+  }, [location.pathname, navigate]);
+
+  // Presence heartbeat for real-time live user detection & immediate revocation check
   useEffect(() => {
     if (!isAuthenticated) return;
-    const sendHeartbeat = () => {
-      fetch('/api/auth/heartbeat', { credentials: 'include' }).catch(() => {});
+    const sendHeartbeat = async () => {
+      try {
+        const res = await fetch('/api/auth/heartbeat', { credentials: 'include' });
+        if (res.status === 401) {
+          localStorage.removeItem('trackbook_session');
+          setIsAuthenticated(false);
+          setCurrentUser(null);
+          navigate('/login', { replace: true });
+        }
+      } catch (err) {}
     };
     sendHeartbeat();
-    const interval = setInterval(sendHeartbeat, 20000);
+    const interval = setInterval(sendHeartbeat, 15000);
     return () => clearInterval(interval);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, navigate]);
 
   // Fetch entries ledger
   const fetchEntries = async () => {
@@ -274,22 +296,22 @@ export default function App() {
           />
         );
       case 'users':
-        return <UsersView onRefreshStats={fetchEntries} isSuperAdmin={isAdmin} dateRange={dateRange} />;
+        return <UsersView onRefreshStats={fetchEntries} isSuperAdmin={isSuperAdmin} currentUser={currentUser} dateRange={dateRange} />;
       case 'cashbooks':
-        return <CashbooksView onAddCashbook={fetchEntries} isSuperAdmin={isAdmin} dateRange={dateRange} />;
+        return <CashbooksView onAddCashbook={fetchEntries} isSuperAdmin={isSuperAdmin} dateRange={dateRange} />;
       case 'entries':
         return (
           <EntriesView
             entries={entries}
             onEntryLogged={fetchEntries}
-            isSuperAdmin={isAdmin}
+            isSuperAdmin={isSuperAdmin}
             dateRange={dateRange}
           />
         );
       case 'attachments':
-        return <AttachmentsView isSuperAdmin={isAdmin} />;
+        return <AttachmentsView isSuperAdmin={isSuperAdmin} />;
       case 'cloud':
-        return <AIAttachmentsView onProcessSuccess={fetchEntries} isSuperAdmin={isAdmin} />;
+        return <AIAttachmentsView onProcessSuccess={fetchEntries} isSuperAdmin={isSuperAdmin} />;
       case 'settings':
         return <SettingsView onResetDatabase={fetchEntries} isSuperAdmin={isSuperAdmin} currentUser={currentUser} />;
       default:
@@ -386,8 +408,17 @@ export default function App() {
         />
 
         {/* Dynamic Panel view container */}
-        <main className="flex-1 p-3 sm:p-6 md:p-8 pt-20 md:pt-24 bg-slate-50 overflow-y-auto max-w-[1400px] w-full mx-auto">
-          {renderTabContent()}
+        <main className="flex-1 w-full bg-slate-50 overflow-y-auto overflow-x-hidden">
+          <div className="w-full max-w-[1536px] mx-auto p-4 sm:p-6 lg:p-8 pt-20 md:pt-24">
+            <motion.div
+              key={currentTab}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+            >
+              {renderTabContent()}
+            </motion.div>
+          </div>
         </main>
       </div>
     </div>

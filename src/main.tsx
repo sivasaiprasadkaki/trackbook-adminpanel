@@ -38,11 +38,21 @@ try {
       }
     }
 
-    return originalFetch(input, {
+    const response = await originalFetch(input, {
       ...init,
       headers,
       credentials: 'include'
     });
+
+    if (response.status === 401) {
+      const url = typeof input === 'string' ? input : (input instanceof Request ? input.url : input.toString());
+      if (!url.includes('/api/auth/login')) {
+        localStorage.removeItem('trackbook_session');
+        window.dispatchEvent(new CustomEvent('trackbook:session_revoked'));
+      }
+    }
+
+    return response;
   };
 
   Object.defineProperty(window, 'fetch', {

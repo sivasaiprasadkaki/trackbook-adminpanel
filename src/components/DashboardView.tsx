@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { Entry, DashboardStats } from '../types';
 import { DateRangeFilter, isDateInRange } from '../utils/dateUtils';
+import { motion } from 'motion/react';
 
 const fetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(input, { ...init, credentials: 'include' });
 
@@ -376,90 +377,128 @@ export default function DashboardView({
         </div>
       )}
 
-      {/* Stats Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+      {/* Stats Cards Grid with Smooth Staggered Motion */}
+      <motion.div 
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 sm:gap-5 items-stretch"
+      >
         {/* Total Users */}
-        <div className="bg-white border border-slate-200 rounded-xl p-6 hover:border-blue-500 transition-all duration-200 card-shadow group cursor-pointer" onClick={() => onNavigateToTab('users')}>
-          <div className="flex justify-between items-start mb-4">
-            <span className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Total Users</span>
-            <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
-              <Users className="w-4 h-4" />
+        <motion.div 
+          whileHover={{ y: -4, transition: { duration: 0.2, ease: "easeOut" } }}
+          whileTap={{ scale: 0.98 }}
+          className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 hover:border-blue-400/80 transition-all duration-200 shadow-xs hover:shadow-md group cursor-pointer flex flex-col justify-between min-h-[148px]" 
+          onClick={() => onNavigateToTab('users')}
+        >
+          <div>
+            <div className="flex justify-between items-start mb-3">
+              <span className="text-slate-500 text-xs font-normal uppercase tracking-wider">Total Users</span>
+              <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 group-hover:scale-105 transition-transform">
+                <Users className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="text-2xl sm:text-3xl font-normal text-slate-900 tracking-tight font-display">
+              {stats.totalUsers.toLocaleString('en-IN')}
             </div>
           </div>
-          <div className="text-2xl font-bold text-slate-900 tracking-tight">
-            {stats.totalUsers.toLocaleString('en-IN')}
-          </div>
-          <div className="flex items-center gap-1.5 mt-2 text-xs">
-            <span className="bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5">
+          <div className="flex items-center gap-1.5 mt-3 text-xs min-w-0">
+            <span className="bg-emerald-50 border border-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md font-normal text-[11px] flex items-center gap-0.5 whitespace-nowrap shrink-0">
               <TrendingUp className="w-3.5 h-3.5" /> +12%
             </span>
-            <span className="text-slate-500 font-sans">vs last month</span>
+            <span className="text-slate-500 font-sans truncate text-[11px]">vs last month</span>
           </div>
-        </div>
+        </motion.div>
 
         {/* Live Users */}
-        <div className="bg-white border border-slate-200 rounded-xl p-6 hover:border-blue-500 transition-all duration-200 card-shadow group cursor-pointer" onClick={() => onNavigateToTab('users')}>
-          <div className="flex justify-between items-start mb-4">
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Live Users</span>
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        <motion.div 
+          whileHover={{ y: -4, transition: { duration: 0.2, ease: "easeOut" } }}
+          whileTap={{ scale: 0.98 }}
+          className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 hover:border-emerald-400/80 transition-all duration-200 shadow-xs hover:shadow-md group cursor-pointer flex flex-col justify-between min-h-[148px]" 
+          onClick={() => onNavigateToTab('users')}
+        >
+          <div>
+            <div className="flex justify-between items-start mb-3">
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500 text-xs font-normal uppercase tracking-wider">Live Users</span>
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+              </div>
+              <div className="w-8 h-8 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 group-hover:scale-105 transition-transform">
+                <UserCheck className="w-4 h-4" />
+              </div>
             </div>
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
-              <UserCheck className="w-4 h-4" />
+            <div className="text-2xl sm:text-3xl font-normal text-slate-900 tracking-tight font-display">
+              {(stats.liveUsers ?? 0).toLocaleString('en-IN')}
             </div>
           </div>
-          <div className="text-2xl font-bold text-slate-900 tracking-tight">
-            {(stats.liveUsers ?? 0).toLocaleString('en-IN')}
-          </div>
-          <div className="flex items-center gap-1.5 mt-2 text-xs">
-            <span className="text-emerald-600 font-mono font-bold flex items-center">
+          <div className="flex items-center gap-1.5 mt-3 text-xs min-w-0">
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-100 text-emerald-700 font-normal text-[11px] whitespace-nowrap shrink-0">
               Real-time
             </span>
-            <span className="text-slate-500 font-sans">presence tracking active</span>
+            <span className="text-slate-500 font-sans truncate text-[11px] whitespace-nowrap">presence active</span>
           </div>
-        </div>
+        </motion.div>
 
         {/* Total Entries */}
-        <div className="bg-white border border-slate-200 rounded-xl p-6 hover:border-blue-500 transition-all duration-200 card-shadow group cursor-pointer" onClick={() => onNavigateToTab('entries')}>
-          <div className="flex justify-between items-start mb-4">
-            <span className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Total Entries</span>
-            <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600">
-              <FileSpreadsheet className="w-4 h-4" />
+        <motion.div 
+          whileHover={{ y: -4, transition: { duration: 0.2, ease: "easeOut" } }}
+          whileTap={{ scale: 0.98 }}
+          className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 hover:border-indigo-400/80 transition-all duration-200 shadow-xs hover:shadow-md group cursor-pointer flex flex-col justify-between min-h-[148px]" 
+          onClick={() => onNavigateToTab('entries')}
+        >
+          <div>
+            <div className="flex justify-between items-start mb-3">
+              <span className="text-slate-500 text-xs font-normal uppercase tracking-wider">Total Entries</span>
+              <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 group-hover:scale-105 transition-transform">
+                <FileSpreadsheet className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="text-2xl sm:text-3xl font-normal text-slate-900 tracking-tight font-display">
+              {stats.totalEntries.toLocaleString('en-IN')}
             </div>
           </div>
-          <div className="text-2xl font-bold text-slate-900 tracking-tight">
-            {stats.totalEntries.toLocaleString('en-IN')}
-          </div>
-          <div className="flex items-center gap-1.5 mt-2 text-xs">
-            <span className="bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5">
+          <div className="flex items-center gap-1.5 mt-3 text-xs min-w-0">
+            <span className="bg-emerald-50 border border-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md font-normal text-[11px] flex items-center gap-0.5 whitespace-nowrap shrink-0">
               <TrendingUp className="w-3.5 h-3.5" /> +18%
             </span>
-            <span className="text-slate-500 font-sans">vs last month</span>
+            <span className="text-slate-500 font-sans truncate text-[11px]">vs last month</span>
           </div>
-        </div>
+        </motion.div>
 
         {/* Total Revenue */}
-        <div className="bg-white border border-slate-200 rounded-xl p-6 hover:border-blue-500 transition-all duration-200 card-shadow group cursor-pointer" onClick={() => onNavigateToTab('entries')}>
-          <div className="flex justify-between items-start mb-4">
-            <span className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Total Revenue</span>
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${stats.totalRevenue < 0 ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
-              <IndianRupee className="w-4 h-4" />
+        <motion.div 
+          whileHover={{ y: -4, transition: { duration: 0.2, ease: "easeOut" } }}
+          whileTap={{ scale: 0.98 }}
+          className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 hover:border-blue-400/80 transition-all duration-200 shadow-xs hover:shadow-md group cursor-pointer flex flex-col justify-between min-h-[148px]" 
+          onClick={() => onNavigateToTab('entries')}
+        >
+          <div>
+            <div className="flex justify-between items-start mb-3">
+              <span className="text-slate-500 text-xs font-normal uppercase tracking-wider">Total Revenue</span>
+              <div className={`w-8 h-8 rounded-xl border flex items-center justify-center group-hover:scale-105 transition-transform ${stats.totalRevenue < 0 ? 'bg-rose-50 border-rose-100 text-rose-600' : 'bg-emerald-50 border-emerald-100 text-emerald-600'}`}>
+                <IndianRupee className="w-4 h-4" />
+              </div>
+            </div>
+            <div className={`text-2xl sm:text-3xl font-normal font-display tracking-tight ${stats.totalRevenue < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+              {formatINR(stats.totalRevenue)}
             </div>
           </div>
-          <div className={`text-2xl font-bold font-mono tracking-tight text-lg ${stats.totalRevenue < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-            {formatINR(stats.totalRevenue)}
-          </div>
-          <div className="flex items-center gap-1.5 mt-2 text-xs">
-            <span className={`px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5 ${stats.totalRevenue < 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>
+          <div className="flex items-center gap-1.5 mt-3 text-xs min-w-0">
+            <span className={`px-1.5 py-0.5 rounded-md font-normal text-[11px] flex items-center gap-0.5 border whitespace-nowrap shrink-0 ${stats.totalRevenue < 0 ? 'bg-rose-50 border-rose-100 text-rose-700' : 'bg-emerald-50 border-emerald-100 text-emerald-700'}`}>
               <TrendingUp className={`w-3.5 h-3.5 ${stats.totalRevenue < 0 ? 'rotate-180 text-rose-600' : 'text-emerald-600'}`} /> {stats.totalRevenue < 0 ? '-14.2%' : '+8.4%'}
             </span>
-            <span className="text-slate-500 font-sans">vs last month</span>
+            <span className="text-slate-500 font-sans truncate text-[11px]">vs last month</span>
           </div>
-        </div>
+        </motion.div>
 
         {/* Attachments Card */}
-        <div 
-          className="bg-white border border-slate-200 rounded-xl p-6 hover:border-teal-500 transition-all duration-200 card-shadow group cursor-pointer relative"
+        <motion.div 
+          whileHover={{ y: -4, transition: { duration: 0.2, ease: "easeOut" } }}
+          whileTap={{ scale: 0.98 }}
+          className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 hover:border-teal-400/80 transition-all duration-200 shadow-xs hover:shadow-md group cursor-pointer relative flex flex-col justify-between min-h-[148px]"
           onClick={() => {
             if (attachmentCardType === 'ai-attachments') {
               onNavigateToTab('ai-attachments');
@@ -468,123 +507,130 @@ export default function DashboardView({
             }
           }}
         >
-          <div className="flex justify-between items-start mb-4">
-            <span className="text-slate-500 text-xs font-semibold uppercase tracking-wider truncate max-w-[110px]" title="Attachments">
-              {attachmentCardType === 'all' && 'Attachments'}
-              {attachmentCardType === 'attachments' && 'Std Files'}
-              {attachmentCardType === 'ai-attachments' && 'AI Files'}
-            </span>
+          <div>
+            <div className="flex justify-between items-start mb-3">
+              <span className="text-slate-500 text-xs font-normal uppercase tracking-wider truncate max-w-[100px]" title="Attachments">
+                {attachmentCardType === 'all' && 'Attachments'}
+                {attachmentCardType === 'attachments' && 'Std Files'}
+                {attachmentCardType === 'ai-attachments' && 'AI Files'}
+              </span>
 
-            {/* Icon and Dropdown Arrow */}
-            <div className="flex items-center gap-1 relative shrink-0">
-              <div className="w-8 h-8 rounded-lg bg-teal-50 flex items-center justify-center text-teal-600">
-                <Paperclip className="w-4 h-4" />
-              </div>
-              
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setAttachmentDropdownOpen(!attachmentDropdownOpen);
-                }}
-                className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
-                title="Select Attachments View"
-              >
-                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${attachmentDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
-
-              {/* Dropdown Menu */}
-              {attachmentDropdownOpen && (
-                <div 
-                  className="absolute right-0 top-10 w-52 bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 z-30 animate-fade-in text-xs"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100">
-                    Navigate & View
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAttachmentCardType('all');
-                      setAttachmentDropdownOpen(false);
-                      onNavigateToTab('attachments');
-                    }}
-                    className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 cursor-pointer ${attachmentCardType === 'all' ? 'font-bold text-teal-700 bg-teal-50/60' : 'text-slate-700'}`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Paperclip className="w-3.5 h-3.5 text-teal-600" />
-                      <span>All Attachments</span>
-                    </span>
-                    <span className="font-mono text-slate-500 font-bold">
-                      {(stats.totalAttachments ?? ((stats.attachmentsCount ?? 0) + (stats.aiAttachmentsCount ?? 0))).toLocaleString('en-IN')}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAttachmentCardType('attachments');
-                      setAttachmentDropdownOpen(false);
-                      onNavigateToTab('attachments');
-                    }}
-                    className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 cursor-pointer ${attachmentCardType === 'attachments' ? 'font-bold text-blue-700 bg-blue-50/60' : 'text-slate-700'}`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <FileText className="w-3.5 h-3.5 text-blue-600" />
-                      <span>Attachments</span>
-                    </span>
-                    <span className="font-mono text-slate-500 font-bold">
-                      {(stats.attachmentsCount ?? 0).toLocaleString('en-IN')}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAttachmentCardType('ai-attachments');
-                      setAttachmentDropdownOpen(false);
-                      onNavigateToTab('ai-attachments');
-                    }}
-                    className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 cursor-pointer ${attachmentCardType === 'ai-attachments' ? 'font-bold text-purple-700 bg-purple-50/60' : 'text-slate-700'}`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                      <span>AI Attachments</span>
-                    </span>
-                    <span className="font-mono text-slate-500 font-bold">
-                      {(stats.aiAttachmentsCount ?? 0).toLocaleString('en-IN')}
-                    </span>
-                  </button>
+              {/* Icon and Dropdown Arrow */}
+              <div className="flex items-center gap-1 relative shrink-0">
+                <div className="w-8 h-8 rounded-xl bg-teal-50 border border-teal-100 flex items-center justify-center text-teal-600 group-hover:scale-105 transition-transform">
+                  <Paperclip className="w-4 h-4" />
                 </div>
-              )}
+                
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAttachmentDropdownOpen(!attachmentDropdownOpen);
+                  }}
+                  className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                  title="Select Attachments View"
+                >
+                  <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${attachmentDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {/* Dropdown Menu */}
+                {attachmentDropdownOpen && (
+                  <div 
+                    className="absolute right-0 top-10 w-52 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 z-30 animate-in fade-in zoom-in-95 duration-150 text-xs"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="px-3 py-1.5 text-[10px] font-normal uppercase tracking-wider text-slate-400 border-b border-slate-100">
+                      Navigate & View
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttachmentCardType('all');
+                        setAttachmentDropdownOpen(false);
+                        onNavigateToTab('attachments');
+                      }}
+                      className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 cursor-pointer ${attachmentCardType === 'all' ? 'font-medium text-teal-700 bg-teal-50/60' : 'text-slate-700'}`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <Paperclip className="w-3.5 h-3.5 text-teal-600" />
+                        <span>All Attachments</span>
+                      </span>
+                      <span className="font-mono text-slate-500 font-normal">
+                        {(stats.totalAttachments ?? ((stats.attachmentsCount ?? 0) + (stats.aiAttachmentsCount ?? 0))).toLocaleString('en-IN')}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttachmentCardType('attachments');
+                        setAttachmentDropdownOpen(false);
+                        onNavigateToTab('attachments');
+                      }}
+                      className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 cursor-pointer ${attachmentCardType === 'attachments' ? 'font-medium text-blue-700 bg-blue-50/60' : 'text-slate-700'}`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <FileText className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Attachments</span>
+                      </span>
+                      <span className="font-mono text-slate-500 font-normal">
+                        {(stats.attachmentsCount ?? 0).toLocaleString('en-IN')}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttachmentCardType('ai-attachments');
+                        setAttachmentDropdownOpen(false);
+                        onNavigateToTab('ai-attachments');
+                      }}
+                      className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 cursor-pointer ${attachmentCardType === 'ai-attachments' ? 'font-medium text-purple-700 bg-purple-50/60' : 'text-slate-700'}`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                        <span>AI Attachments</span>
+                      </span>
+                      <span className="font-mono text-slate-500 font-normal">
+                        {(stats.aiAttachmentsCount ?? 0).toLocaleString('en-IN')}
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="text-2xl sm:text-3xl font-normal text-slate-900 tracking-tight font-display">
+              {attachmentCardType === 'all' && (stats.totalAttachments ?? ((stats.attachmentsCount ?? 0) + (stats.aiAttachmentsCount ?? 0))).toLocaleString('en-IN')}
+              {attachmentCardType === 'attachments' && (stats.attachmentsCount ?? 0).toLocaleString('en-IN')}
+              {attachmentCardType === 'ai-attachments' && (stats.aiAttachmentsCount ?? 0).toLocaleString('en-IN')}
             </div>
           </div>
 
-          <div className="text-2xl font-bold text-slate-900 tracking-tight">
-            {attachmentCardType === 'all' && (stats.totalAttachments ?? ((stats.attachmentsCount ?? 0) + (stats.aiAttachmentsCount ?? 0))).toLocaleString('en-IN')}
-            {attachmentCardType === 'attachments' && (stats.attachmentsCount ?? 0).toLocaleString('en-IN')}
-            {attachmentCardType === 'ai-attachments' && (stats.aiAttachmentsCount ?? 0).toLocaleString('en-IN')}
-          </div>
-
-          <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100 text-xs">
-            <span className="text-slate-500 flex items-center gap-1 text-[11px]">
-              <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-              Std: <strong className="text-slate-700">{(stats.attachmentsCount ?? 0)}</strong>
+          <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-100 text-xs min-w-0">
+            <span className="text-slate-500 flex items-center gap-1.5 text-[11px] whitespace-nowrap">
+              <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0"></span>
+              Std: <span className="text-slate-700 font-normal">{(stats.attachmentsCount ?? 0)}</span>
             </span>
-            <span className="text-slate-500 flex items-center gap-1 text-[11px]">
-              <span className="w-2 h-2 rounded-full bg-purple-500"></span>
-              AI: <strong className="text-slate-700">{(stats.aiAttachmentsCount ?? 0)}</strong>
+            <span className="text-slate-500 flex items-center gap-1.5 text-[11px] whitespace-nowrap">
+              <span className="w-2 h-2 rounded-full bg-purple-500 shrink-0"></span>
+              AI: <span className="text-slate-700 font-normal">{(stats.aiAttachmentsCount ?? 0)}</span>
             </span>
           </div>
-        </div>
-      </div>
+        </motion.div>
+      </motion.div>
 
       {/* Main Grid: Left Column (Table) & Right Column (Widgets) */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-        {/* Left Column: Recent Activity Table (9 Cols on wide screens) */}
-        <div className="xl:col-span-8 bg-white border border-slate-200 rounded-xl card-shadow flex flex-col">
-          <div className="p-6 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Recent Activity Table (8 Cols on wide screens) */}
+        <motion.div 
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
+          className="xl:col-span-8 bg-white border border-slate-200/90 rounded-2xl shadow-xs flex flex-col overflow-hidden"
+        >
+          <div className="p-5 sm:p-6 border-b border-slate-200/80 flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
             <div>
               <h3 className="font-sans text-base font-bold text-slate-900">Recent Activity</h3>
               <p className="text-xs text-slate-500 mt-1">Real-time recording of ledger updates.</p>
@@ -598,15 +644,15 @@ export default function DashboardView({
                   placeholder="Search activity..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-48 h-8 pl-8 pr-3 border border-slate-200 rounded-md text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100"
+                  className="w-48 h-8 pl-8 pr-3 border border-slate-200 rounded-lg text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100 transition-all"
                 />
               </div>
               <button
                 onClick={() => onNavigateToTab('entries')}
-                className="text-blue-600 text-xs font-semibold hover:underline flex items-center gap-0.5 shrink-0"
+                className="text-blue-600 text-xs font-semibold hover:text-blue-700 hover:underline flex items-center gap-0.5 shrink-0 transition-colors"
               >
                 <span>View All</span>
-                <ChevronRight className="w-3 h-3" />
+                <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
@@ -625,15 +671,15 @@ export default function DashboardView({
                   .slice(0, 2);
 
                 return (
-                  <div key={entry.id} className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 space-y-2">
+                  <div key={entry.id} className="bg-slate-50/70 border border-slate-200/80 rounded-xl p-3.5 space-y-2">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs shrink-0">
                           {initials}
                         </div>
-                        <span className="font-bold text-slate-900 text-xs">{entry.userName}</span>
+                        <span className="font-bold text-slate-900 text-xs truncate">{entry.userName}</span>
                       </div>
-                      <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-semibold ${
+                      <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-semibold whitespace-nowrap shrink-0 ${
                         entry.status === 'Success'
                           ? 'bg-emerald-100 text-emerald-800'
                           : entry.status === 'Processing'
@@ -645,8 +691,8 @@ export default function DashboardView({
                     </div>
 
                     <div className="flex items-center justify-between text-xs pt-1">
-                      <span className="text-slate-500 font-medium">{entry.cashbookName}</span>
-                      <span className="font-mono font-bold text-slate-900">
+                      <span className="text-slate-500 font-medium truncate">{entry.cashbookName}</span>
+                      <span className="font-mono font-bold text-slate-900 shrink-0">
                         {entry.amount !== null ? `₹ ${entry.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '-'}
                       </span>
                     </div>
@@ -664,18 +710,18 @@ export default function DashboardView({
           <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                  <th className="py-3 px-6">User</th>
-                  <th className="py-3 px-6">Cashbook</th>
-                  <th className="py-3 px-6 text-right">Amount</th>
-                  <th className="py-3 px-6">Date & Time</th>
-                  <th className="py-3 px-6 text-center">Status</th>
+                <tr className="bg-slate-50/80 text-slate-500 text-xs font-semibold uppercase tracking-wider border-b border-slate-200/80">
+                  <th className="py-3.5 px-5 text-left w-[26%]">User</th>
+                  <th className="py-3.5 px-5 text-left w-[20%]">Cashbook</th>
+                  <th className="py-3.5 px-5 text-right w-[18%]">Amount</th>
+                  <th className="py-3.5 px-5 text-left w-[24%]">Date & Time</th>
+                  <th className="py-3.5 px-5 text-center w-[12%]">Status</th>
                 </tr>
               </thead>
               <tbody className="text-sm divide-y divide-slate-100 text-slate-700">
                 {paginatedEntries.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-8 text-center text-slate-400 text-xs">
+                    <td colSpan={5} className="py-10 text-center text-slate-400 text-xs">
                       No matching activity found.
                     </td>
                   </tr>
@@ -689,8 +735,6 @@ export default function DashboardView({
                       .toUpperCase()
                       .slice(0, 2);
 
-                    const isAI = entry.action === 'AI Receipt Scan';
-
                     // Avatar color backgrounds
                     let avatarBg = 'bg-slate-100 text-slate-600';
                     if (initials === 'AJ') avatarBg = 'bg-blue-50 text-blue-700';
@@ -699,24 +743,24 @@ export default function DashboardView({
                     if (initials === 'PS') avatarBg = 'bg-rose-50 text-rose-700';
 
                     return (
-                      <tr key={entry.id} className="hover:bg-slate-50 transition-colors h-[56px]">
+                      <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors duration-150 h-[54px] group">
                         {/* User */}
-                        <td className="py-2.5 px-6 font-medium text-slate-800">
-                          <div className="flex items-center gap-2.5">
-                            <div className={`w-8 h-8 rounded-full ${avatarBg} flex items-center justify-center font-bold text-xs`}>
+                        <td className="py-2.5 px-5 font-medium text-slate-800">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className={`w-8 h-8 rounded-full ${avatarBg} flex items-center justify-center font-bold text-xs shrink-0 shadow-xs`}>
                               {initials}
                             </div>
-                            <span>{entry.userName}</span>
+                            <span className="truncate max-w-[150px]">{entry.userName}</span>
                           </div>
                         </td>
 
                         {/* Cashbook */}
-                        <td className="py-2.5 px-6 text-slate-500">
+                        <td className="py-2.5 px-5 text-slate-500 truncate max-w-[130px]">
                           {entry.cashbookName}
                         </td>
 
                         {/* Amount */}
-                        <td className="py-2.5 px-6 text-right font-mono font-medium">
+                        <td className="py-2.5 px-5 text-right font-mono font-medium whitespace-nowrap">
                           {entry.amount !== null ? (
                             <span className={entry.status === 'Warning' ? 'text-red-600' : 'text-slate-900'}>
                               ₹ {entry.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -727,7 +771,7 @@ export default function DashboardView({
                         </td>
 
                         {/* Date & Time */}
-                        <td className="py-2.5 px-6 text-xs text-slate-400 font-mono whitespace-nowrap">
+                        <td className="py-2.5 px-5 text-xs text-slate-400 font-mono whitespace-nowrap">
                           {entry.timestamp ? (
                             <>
                               <span className="text-slate-600">
@@ -755,13 +799,13 @@ export default function DashboardView({
                         </td>
 
                         {/* Status */}
-                        <td className="py-2.5 px-6 text-center">
-                          <span className={`inline-flex px-2 py-1 rounded text-xs font-semibold ${
+                        <td className="py-2.5 px-5 text-center whitespace-nowrap">
+                          <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold ${
                             entry.status === 'Success'
-                              ? 'bg-emerald-50 text-emerald-700'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
                               : entry.status === 'Processing'
-                              ? 'bg-blue-50 text-blue-700'
-                              : 'bg-rose-50 text-rose-700'
+                              ? 'bg-blue-50 text-blue-700 border border-blue-100'
+                              : 'bg-rose-50 text-rose-700 border border-rose-100'
                           }`}>
                             {entry.status}
                           </span>
@@ -776,7 +820,7 @@ export default function DashboardView({
 
           {/* Pagination Footer */}
           {totalPages > 1 && (
-            <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/50 rounded-b-xl mt-auto">
+            <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/50 rounded-b-2xl mt-auto">
               <span className="text-xs text-slate-500">
                 Showing <span className="font-semibold text-slate-700">{startIndex + 1}</span> to{' '}
                 <span className="font-semibold text-slate-700">
@@ -788,25 +832,25 @@ export default function DashboardView({
                 <button
                   onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
                   disabled={currentPage === 1}
-                  className={`p-1.5 rounded-md border border-slate-200 bg-white transition-all duration-150 ${
+                  className={`p-1.5 rounded-lg border border-slate-200 bg-white transition-all duration-150 ${
                     currentPage === 1
                       ? 'text-slate-300 bg-slate-50 cursor-not-allowed'
-                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 cursor-pointer'
+                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 cursor-pointer shadow-xs active:scale-95'
                   }`}
                   title="Previous Page"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
-                <span className="text-xs font-semibold text-slate-700 min-w-[50px] text-center">
+                <span className="text-xs font-semibold text-slate-700 min-w-[50px] text-center font-mono">
                   {currentPage} / {totalPages}
                 </span>
                 <button
                   onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
                   disabled={currentPage === totalPages}
-                  className={`p-1.5 rounded-md border border-slate-200 bg-white transition-all duration-150 ${
+                  className={`p-1.5 rounded-lg border border-slate-200 bg-white transition-all duration-150 ${
                     currentPage === totalPages
                       ? 'text-slate-300 bg-slate-50 cursor-not-allowed'
-                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 cursor-pointer'
+                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 cursor-pointer shadow-xs active:scale-95'
                   }`}
                   title="Next Page"
                 >
@@ -815,18 +859,24 @@ export default function DashboardView({
               </div>
             </div>
           )}
-        </div>
+        </motion.div>
 
         {/* Right Column: Widgets (4 Cols on wide screens) */}
         <div className="xl:col-span-4 flex flex-col gap-6">
           {/* AI Processing Stats Widget */}
-          <div className="bg-white border border-slate-200 rounded-xl p-6 card-shadow flex flex-col">
+          <motion.div 
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
+            whileHover={{ y: -3, transition: { duration: 0.2 } }}
+            className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col"
+          >
             <h3 className="font-sans text-sm font-bold text-slate-900 mb-6 flex items-center gap-2">
               <Brain className="w-4.5 h-4.5 text-blue-600" />
               <span>AI Processing Stats</span>
             </h3>
 
-            {/* Simulated Donut Chart using clean responsive SVG */}
+            {/* Simulated Donut Chart using clean responsive SVG with animated fill */}
             <div className="relative w-40 h-40 mx-auto mb-6 flex items-center justify-center">
               <svg className="w-full h-full transform -rotate-90" viewBox="0 0 120 120">
                 {/* Background circle */}
@@ -839,7 +889,7 @@ export default function DashboardView({
                   fill="transparent"
                 />
                 {/* Accuracy segment representing dynamic accuracy */}
-                <circle
+                <motion.circle
                   cx="60"
                   cy="60"
                   r="50"
@@ -847,8 +897,10 @@ export default function DashboardView({
                   strokeWidth="12"
                   fill="transparent"
                   strokeDasharray={`${2 * Math.PI * 50}`}
-                  strokeDashoffset={`${2 * Math.PI * 50 * (1 - (stats.accuracy || 98) / 100)}`}
-                  className="transition-all duration-1000 ease-out"
+                  initial={{ strokeDashoffset: 2 * Math.PI * 50 }}
+                  animate={{ strokeDashoffset: 2 * Math.PI * 50 * (1 - (stats.accuracy || 98) / 100) }}
+                  transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.2 }}
+                  strokeLinecap="round"
                 />
               </svg>
               {/* Inner Label */}
@@ -859,30 +911,36 @@ export default function DashboardView({
             </div>
 
             {/* Legends */}
-            <div className="space-y-3 pt-2 border-t border-slate-100">
+            <div className="space-y-3 pt-3 border-t border-slate-100">
               <div className="flex justify-between items-center text-sm">
                 <span className="text-slate-500 flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0"></span>
                   <span>Auto-Categorized</span>
                 </span>
-                <span className="font-semibold text-slate-800">
+                <span className="font-semibold text-slate-800 font-mono">
                   {(stats.aiProcessed ?? 0).toLocaleString('en-IN')}
                 </span>
               </div>
               <div className="flex justify-between items-center text-sm">
                 <span className="text-slate-500 flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-slate-200"></span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-200 shrink-0"></span>
                   <span>Manual Review</span>
                 </span>
-                <span className="font-semibold text-slate-800">
+                <span className="font-semibold text-slate-800 font-mono">
                   {(stats.manualProcessed ?? 0).toLocaleString('en-IN')}
                 </span>
               </div>
             </div>
-          </div>
+          </motion.div>
 
           {/* Storage Used Widget */}
-          <div className="bg-white border border-slate-200 rounded-xl p-6 card-shadow">
+          <motion.div 
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            whileHover={{ y: -3, transition: { duration: 0.2 } }}
+            className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs"
+          >
             <h3 className="font-sans text-sm font-bold text-slate-900 mb-6 flex items-center gap-2">
               <Cloud className="w-4.5 h-4.5 text-blue-600" />
               <span>Storage Used</span>
@@ -891,22 +949,24 @@ export default function DashboardView({
             <div className="mb-4">
               <div className="flex justify-between items-end mb-2">
                 <span className="text-2xl font-bold text-slate-900 tracking-tight">{formatStorage(stats.storageUsed)} GB</span>
-                <span className="text-slate-500 text-xs">/ {stats.storageLimit} GB</span>
+                <span className="text-slate-500 text-xs font-mono">/ {stats.storageLimit} GB</span>
               </div>
               
-              {/* Custom styled progress bar */}
+              {/* Custom styled animated progress bar */}
               <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-600 rounded-full transition-all duration-1000"
-                  style={{ width: `${(stats.storageUsed / stats.storageLimit) * 100}%` }}
-                ></div>
+                <motion.div
+                  className="h-full bg-blue-600 rounded-full"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(100, (stats.storageUsed / stats.storageLimit) * 100)}%` }}
+                  transition={{ duration: 1.0, ease: [0.16, 1, 0.3, 1], delay: 0.3 }}
+                />
               </div>
             </div>
 
             <p className="text-xs text-slate-500 leading-relaxed">
               Primary storage allocated for original receipt scans, audit PDF attachments, and monthly exported financial statements.
             </p>
-          </div>
+          </motion.div>
         </div>
       </div>
     </div>

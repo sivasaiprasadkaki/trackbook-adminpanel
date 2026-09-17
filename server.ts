@@ -158,84 +158,7 @@ async function runStartupVerification() {
   } catch (err: any) {
     console.error(`[STARTUP EXCEPTION] Failed to query admin_users: ${err.message}`);
   }
-
-  // 7. Auto-seed admin credentials if missing
-  await autoSeedAdmins();
 }
-
-async function autoSeedAdmins() {
-  const defaultAdmins = [
-    {
-      username: 'SivasaiPrasad',
-      password: 'Siva@122',
-      full_name: 'Siva Sai Prasad',
-      role: 'super_admin'
-    },
-    {
-      username: 'karthikC',
-      password: 'Ckarthik',
-      full_name: 'Karthik C',
-      role: 'admin'
-    }
-  ];
-
-  const adminClient = getSupabaseAdmin();
-  let fallbackAdmins = readFallbackAdmins();
-
-  for (const item of defaultAdmins) {
-    let fallbackUser = fallbackAdmins.find(a => a.username.toLowerCase() === item.username.toLowerCase());
-    if (!fallbackUser) {
-      const hashedPassword = await bcrypt.hash(item.password, 12);
-      fallbackUser = {
-        id: crypto.randomUUID(),
-        username: item.username,
-        password_hash: hashedPassword,
-        full_name: item.full_name,
-        role: item.role,
-        status: 'active',
-        last_login_at: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-      fallbackAdmins.push(fallbackUser);
-    }
-
-    if (adminClient) {
-      try {
-        const { data: existing } = await adminClient
-          .from('admin_users')
-          .select('id, username')
-          .ilike('username', item.username);
-
-        if (!existing || existing.length === 0) {
-          const hashedPassword = fallbackUser ? fallbackUser.password_hash : await bcrypt.hash(item.password, 12);
-          const newDbAdmin = {
-            id: fallbackUser ? fallbackUser.id : crypto.randomUUID(),
-            username: item.username,
-            password_hash: hashedPassword,
-            full_name: item.full_name,
-            role: item.role,
-            status: 'active',
-            last_login_at: null,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          };
-          const { error: insErr } = await adminClient.from('admin_users').insert(newDbAdmin);
-          if (insErr) {
-            console.warn(`[AUTO-SEED] Could not insert admin ${item.username} into DB:`, insErr.message);
-          } else {
-            console.log(`[AUTO-SEED SUCCESS] Admin user ${item.username} inserted into database.`);
-          }
-        }
-      } catch (err: any) {
-        console.warn(`[AUTO-SEED] Exception checking admin ${item.username} in DB:`, err.message);
-      }
-    }
-  }
-
-  writeFallbackAdmins(fallbackAdmins);
-}
-
 
 // In-memory active presence tracker for live users detection
 const activeUserPresence = new Map<string, number>();
@@ -430,12 +353,10 @@ function getSessionCookieAttributes(req: any, maxAge = 24 * 60 * 60) {
 }
 
 // ------------------------------------------------------------------------
-// USERNAME + PASSWORD AUTHENTICATION ENGINE
+// AUTHORITATIVE SUPABASE admin_users AUTHENTICATION & AUTHORIZATION ENGINE
 // ------------------------------------------------------------------------
 
-const FALLBACK_ADMIN_FILE = path.join(process.cwd(), 'admin_users_fallback.json');
-
-interface FallbackAdmin {
+interface AdminUser {
   id: string;
   username: string;
   password_hash: string;
@@ -445,26 +366,6 @@ interface FallbackAdmin {
   last_login_at: string | null;
   created_at: string;
   updated_at: string;
-}
-
-function readFallbackAdmins(): FallbackAdmin[] {
-  try {
-    if (fs.existsSync(FALLBACK_ADMIN_FILE)) {
-      const content = fs.readFileSync(FALLBACK_ADMIN_FILE, 'utf8');
-      return JSON.parse(content);
-    }
-  } catch (err) {
-    console.error('[FALLBACK AUTH] Failed to read fallback admin file:', err);
-  }
-  return [];
-}
-
-function writeFallbackAdmins(admins: FallbackAdmin[]) {
-  try {
-    fs.writeFileSync(FALLBACK_ADMIN_FILE, JSON.stringify(admins, null, 2), 'utf8');
-  } catch (err) {
-    console.error('[FALLBACK AUTH] Failed to write fallback admin file:', err);
-  }
 }
 
 const AUDIT_LOG_FILE = path.join(process.cwd(), 'audit_logs.json');
@@ -482,15 +383,12 @@ interface AuditLog {
   duration_mins?: number;
 }
 
-const DEFAULT_SEED_AUDIT_LOGS: AuditLog[] = [];
-
 function readAuditLogs(): AuditLog[] {
   try {
     if (fs.existsSync(AUDIT_LOG_FILE)) {
       const content = fs.readFileSync(AUDIT_LOG_FILE, 'utf8');
       const parsed: AuditLog[] = JSON.parse(content);
       if (Array.isArray(parsed)) {
-        // Filter out any mock/seed sample logs
         const realLogs = parsed.filter(log => !log.id.startsWith('log-seed-'));
         return realLogs.map(log => {
           const roleLower = (log.user_role || '').toLowerCase();
@@ -594,51 +492,45 @@ function writeAccessRequests(requests: AccessRequest[]) {
   }
 }
 
-async function getAdminUserByUsername(username: string): Promise<FallbackAdmin | null> {
+// Authoritative query against Supabase admin_users table ONLY
+async function getAdminUserByUsername(username: string): Promise<AdminUser | null> {
   const adminClient = getSupabaseAdmin();
-  const searchLower = (username || '').toLowerCase().trim();
+  const searchLower = (username || '').toLowerCase().trim().replace(/^@/, '');
   const searchClean = searchLower.replace(/[^a-z0-9]/g, '');
 
-  if (adminClient) {
-    try {
-      const { data, error } = await adminClient
-        .from('admin_users')
-        .select('*')
-        .ilike('username', searchLower);
-      
-      if (!error && data && data.length > 0) {
-        return data[0];
-      }
+  if (!searchClean && !searchLower) return null;
+  if (!adminClient) return null;
 
-      // Secondary check: query all admin users in Supabase and match flexibly
-      const { data: allAdmins, error: allErr } = await adminClient
-        .from('admin_users')
-        .select('*');
-      if (!allErr && allAdmins && allAdmins.length > 0) {
-        const found = allAdmins.find((a: any) => {
-          const uLower = (a.username || '').toLowerCase();
-          const uClean = uLower.replace(/[^a-z0-9]/g, '');
-          const nameClean = (a.full_name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-          return uLower === searchLower || uClean === searchClean || (searchClean && nameClean === searchClean);
-        });
-        if (found) return found;
-      }
-    } catch (err: any) {
-      // Quiet fallback to local JSON
+  try {
+    const { data, error } = await adminClient
+      .from('admin_users')
+      .select('*')
+      .ilike('username', searchLower)
+      .maybeSingle();
+    
+    if (!error && data) {
+      return data;
     }
+
+    const { data: allAdmins, error: allErr } = await adminClient
+      .from('admin_users')
+      .select('*');
+    if (!allErr && allAdmins && allAdmins.length > 0) {
+      const found = allAdmins.find((a: any) => {
+        const uLower = (a.username || '').toLowerCase().replace(/^@/, '');
+        const uClean = uLower.replace(/[^a-z0-9]/g, '');
+        return uLower === searchLower || (searchClean && uClean === searchClean);
+      });
+      if (found) return found;
+    }
+  } catch (err: any) {
+    console.error('[AUTH DB QUERY] Error querying admin_users:', err);
   }
 
-  // Fallback to local JSON file
-  const admins = readFallbackAdmins();
-  const match = admins.find(a => {
-    const uLower = (a.username || '').toLowerCase();
-    const uClean = uLower.replace(/[^a-z0-9]/g, '');
-    const nameClean = (a.full_name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    return uLower === searchLower || uClean === searchClean || (searchClean && nameClean === searchClean);
-  });
-  return match || null;
+  return null;
 }
 
+// Authoritative verification of admin initialization from Supabase admin_users table ONLY
 async function isAuthInitialized(): Promise<boolean> {
   const adminClient = getSupabaseAdmin();
   if (adminClient) {
@@ -650,179 +542,254 @@ async function isAuthInitialized(): Promise<boolean> {
         return count > 0;
       }
     } catch (err) {
-      // ignore and let fallback handle
+      console.error('[AUTH DB] Error checking admin_users count:', err);
     }
   }
-  const admins = readFallbackAdmins();
-  return admins.length > 0;
+  return true;
 }
 
 const authRouter = express.Router();
 
+// Session verification with live Supabase admin_users check on every request
 authRouter.get('/session', async (req, res) => {
-  console.log('[AUTH FLOW] GET /api/auth/session called');
-  console.log('[AUTH FLOW] Raw Cookie Header:', req.headers.cookie);
   const is_initialized = await isAuthInitialized();
   const sessionToken = getSessionToken(req);
-  console.log('[AUTH FLOW] Retrieved Session Token:', sessionToken ? '(Token present)' : '(No token)');
-  let authenticated = false;
-  let userPayload = null;
 
-  if (sessionToken) {
-    try {
-      const decrypted = decryptSecret(sessionToken);
-      console.log('[AUTH FLOW] Successfully decrypted session token');
-      const session = JSON.parse(decrypted);
-      console.log('[AUTH FLOW] Parsed session JSON:', JSON.stringify(session));
-      if (session && session.admin && session.expiresAt > Date.now()) {
-        authenticated = true;
-        userPayload = session.user;
-        if (session.user) {
-          touchUserPresence(session.user.id);
-          touchUserPresence(session.user.username);
-          touchUserPresence(session.user.full_name);
-          touchUserPresence(session.user.email);
-        }
-        console.log('[AUTH FLOW] Session is VALID. Authenticated user:', session.user.username);
-      } else {
-        if (!session) {
-          console.log('[AUTH FLOW] Session parsing failed or null');
-        } else if (!session.admin) {
-          console.log('[AUTH FLOW] Session admin property is false or missing');
-        } else if (session.expiresAt <= Date.now()) {
-          console.log(`[AUTH FLOW] Session expired. Expires at: ${session.expiresAt}, Now: ${Date.now()}`);
-        }
-      }
-    } catch (e: any) {
-      console.warn('[AUTH FLOW] ERROR: Failed to parse/decrypt session token:', e.message);
-    }
-  } else {
-    console.log('[AUTH FLOW] No session token found in request');
+  if (!sessionToken) {
+    return res.json({ authenticated: false, is_initialized, user: null });
   }
 
-  res.json({
-    authenticated,
-    is_initialized,
-    user: userPayload
-  });
+  try {
+    const decrypted = decryptSecret(sessionToken);
+    const session = JSON.parse(decrypted);
+
+    if (!session || !session.admin || session.expiresAt <= Date.now() || !session.user?.id) {
+      const cookieOptions = getSessionCookieAttributes(req, 0);
+      res.setHeader('Set-Cookie', `trackbook_session=; ${cookieOptions}`);
+      return res.json({ authenticated: false, is_initialized, user: null });
+    }
+
+    const adminClient = getSupabaseAdmin();
+    if (!adminClient) {
+      return res.json({ authenticated: false, is_initialized, user: null });
+    }
+
+    // Authoritative check against Supabase admin_users
+    const { data: adminRecord, error: dbErr } = await adminClient
+      .from('admin_users')
+      .select('id, username, full_name, role, status')
+      .eq('id', session.user.id)
+      .maybeSingle();
+
+    if (dbErr || !adminRecord || (adminRecord.status && adminRecord.status.toLowerCase() !== 'active')) {
+      console.warn(`[AUTH] Active session revoked: user ${session.user?.username} (${session.user?.id}) not found or inactive in admin_users.`);
+      const cookieOptions = getSessionCookieAttributes(req, 0);
+      res.setHeader('Set-Cookie', `trackbook_session=; ${cookieOptions}`);
+      return res.json({
+        authenticated: false,
+        is_initialized,
+        user: null,
+        error: 'You are not authorized to access the Admin Panel.'
+      });
+    }
+
+    touchUserPresence(adminRecord.id);
+    touchUserPresence(adminRecord.username);
+    touchUserPresence(adminRecord.full_name);
+
+    return res.json({
+      authenticated: true,
+      is_initialized,
+      user: {
+        id: adminRecord.id,
+        username: adminRecord.username,
+        full_name: adminRecord.full_name,
+        role: adminRecord.role
+      }
+    });
+  } catch (e) {
+    const cookieOptions = getSessionCookieAttributes(req, 0);
+    res.setHeader('Set-Cookie', `trackbook_session=; ${cookieOptions}`);
+    return res.json({ authenticated: false, is_initialized, user: null });
+  }
 });
 
+// Authoritative Login Flow
 authRouter.post('/login', async (req, res) => {
-  console.log('[AUTH FLOW] POST /api/auth/login received');
   try {
     const { username, password } = req.body;
     if (!username || !password) {
-      console.log('[AUTH FLOW] Login failed: Username or password missing');
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
-    console.log('[AUTH FLOW] Searching for admin user:', username);
-    const user = await getAdminUserByUsername(username);
-    if (!user) {
-      console.log('[AUTH FLOW] Login failed: Username not found:', username);
-      return res.status(401).json({ error: 'Invalid username or password' });
-    }
-    console.log('[AUTH FLOW] Username found, user status:', user.status);
+    const cleanUsername = String(username).trim();
+    const rawPassword = String(password);
+    const cleanPassword = rawPassword.trim();
 
-    if (user.status && user.status.toLowerCase() !== 'active') {
-      console.log('[AUTH FLOW] Login failed: Account inactive');
-      return res.status(401).json({ error: 'Account is inactive. Please contact support.' });
-    }
-
-    console.log('[AUTH FLOW] Verifying password with bcrypt...');
-    let match = false;
-    try {
-      match = await bcrypt.compare(password, user.password_hash);
-    } catch (bcryptErr: any) {
-      console.error('[AUTH FLOW] bcrypt comparison threw error:', bcryptErr.message);
-      return res.status(500).json({ error: 'Internal bcrypt error during password check' });
-    }
-
-    if (!match) {
-      console.log('[AUTH FLOW] Login failed: Password mismatch');
-      return res.status(401).json({ error: 'Invalid username or password' });
-    }
-    console.log('[AUTH FLOW] Password verification success');
-
-    const nowStr = new Date().toISOString();
-    
-    // Update last_login_at
     const adminClient = getSupabaseAdmin();
-    let updatedInSupabase = false;
-    if (adminClient) {
+    if (!adminClient) {
+      return res.status(500).json({ error: 'Database service unavailable' });
+    }
+
+    let authUid: string | null = null;
+    let authUserEmail: string | null = null;
+
+    // STEP 1 & 2: If cleanUsername is an email, authenticate via Supabase Auth
+    const isEmailInput = cleanUsername.includes('@');
+    const supabase = getSupabase();
+
+    if (isEmailInput && supabase) {
       try {
-        const { error } = await adminClient
-          .from('admin_users')
-          .update({ last_login_at: nowStr, updated_at: nowStr })
-          .eq('id', user.id);
-        if (!error) {
-          updatedInSupabase = true;
-          console.log('[AUTH FLOW] Updated last_login_at in Supabase');
-        } else {
-          console.warn('[AUTH FLOW] Supabase update last_login_at error:', error.message);
+        const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
+          email: cleanUsername.toLowerCase(),
+          password: cleanPassword
+        });
+        if (!authErr && authData?.user) {
+          authUid = authData.user.id;
+          authUserEmail = authData.user.email || null;
         }
-      } catch (err: any) {
-        console.warn('[AUTH FLOW] Supabase update last_login_at exception:', err.message);
+      } catch (e: any) {
+        console.warn('[AUTH FLOW] Supabase signInWithPassword error:', e.message);
       }
     }
-    if (!updatedInSupabase) {
-      const admins = readFallbackAdmins();
-      const matchIndex = admins.findIndex(a => a.id === user.id);
-      if (matchIndex !== -1) {
-        admins[matchIndex].last_login_at = nowStr;
-        admins[matchIndex].updated_at = nowStr;
-        writeFallbackAdmins(admins);
-        console.log('[AUTH FLOW] Updated last_login_at in fallback JSON');
+
+    // STEP 4: Query admin_users using authenticated user's stable user ID or username
+    // THE admin_users TABLE IS THE SOLE AUTHORITATIVE SOURCE OF TRUTH
+    let adminRecord: any = null;
+
+    if (authUid) {
+      // Look up by auth.uid()
+      const { data, error } = await adminClient
+        .from('admin_users')
+        .select('*')
+        .eq('id', authUid)
+        .maybeSingle();
+      if (!error && data) {
+        adminRecord = data;
       }
+    }
+
+    // If not found by authUid (or if login was with username), search admin_users by username
+    if (!adminRecord) {
+      const { data, error } = await adminClient
+        .from('admin_users')
+        .select('*')
+        .ilike('username', cleanUsername)
+        .maybeSingle();
+      if (!error && data) {
+        adminRecord = data;
+      }
+    }
+
+    // If still not found and an email was provided, check if any admin_users record has this email as username
+    if (!adminRecord && authUserEmail) {
+      const { data, error } = await adminClient
+        .from('admin_users')
+        .select('*')
+        .ilike('username', authUserEmail)
+        .maybeSingle();
+      if (!error && data) {
+        adminRecord = data;
+      }
+    }
+
+    // STEP 5 & 7: If record does NOT exist in admin_users:
+    // DENY BY DEFAULT. NEVER grant access based only on successful Supabase login.
+    if (!adminRecord) {
+      console.warn(`[AUTH FLOW] Access denied: User '${cleanUsername}' does not exist in admin_users table.`);
+      if (supabase) {
+        try { await supabase.auth.signOut(); } catch (e) {}
+      }
+      const cookieOptions = getSessionCookieAttributes(req, 0);
+      res.setHeader('Set-Cookie', `trackbook_session=; ${cookieOptions}`);
+      return res.status(403).json({
+        error: 'You are not authorized to access the Admin Panel.',
+        authorized: false
+      });
+    }
+
+    // Check account status
+    if (adminRecord.status && adminRecord.status.toLowerCase() !== 'active') {
+      console.warn(`[AUTH FLOW] Access denied: Admin account '${adminRecord.username}' is inactive.`);
+      if (supabase) {
+        try { await supabase.auth.signOut(); } catch (e) {}
+      }
+      const cookieOptions = getSessionCookieAttributes(req, 0);
+      res.setHeader('Set-Cookie', `trackbook_session=; ${cookieOptions}`);
+      return res.status(403).json({
+        error: 'You are not authorized to access the Admin Panel. Account is inactive.',
+        authorized: false
+      });
+    }
+
+    // Verify password if not already validated by Supabase Auth
+    if (!authUid) {
+      let match = false;
+      try {
+        match = await bcrypt.compare(rawPassword, adminRecord.password_hash);
+        if (!match && cleanPassword !== rawPassword) {
+          match = await bcrypt.compare(cleanPassword, adminRecord.password_hash);
+        }
+      } catch (bcryptErr: any) {
+        console.error('[AUTH FLOW] bcrypt comparison error:', bcryptErr.message);
+      }
+
+      if (!match) {
+        console.log('[AUTH FLOW] Password mismatch for admin user:', cleanUsername);
+        return res.status(401).json({
+          error: "You don't have access. Invalid credentials. Please contact the administrator."
+        });
+      }
+    }
+
+    // STEP 6: Verified active authorization record exists in admin_users -> ALLOW ACCESS!
+    const nowStr = new Date().toISOString();
+    try {
+      await adminClient
+        .from('admin_users')
+        .update({ last_login_at: nowStr, updated_at: nowStr })
+        .eq('id', adminRecord.id);
+    } catch (e: any) {
+      console.warn('[AUTH FLOW] Failed to update last_login_at:', e.message);
     }
 
     const sessionPayload = {
       admin: true,
       user: {
-        id: user.id,
-        username: user.username,
-        full_name: user.full_name,
-        role: user.role
+        id: adminRecord.id,
+        username: adminRecord.username,
+        full_name: adminRecord.full_name,
+        role: adminRecord.role
       },
       expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24 Hours
     };
 
     recordAuditLog({
-      user_name: user.full_name || user.username,
-      user_role: (user.role || '').toLowerCase().includes('super') ? 'Super Admin' : 'Admin',
+      user_name: adminRecord.full_name || adminRecord.username,
+      user_role: (adminRecord.role || '').toLowerCase().includes('super') ? 'Super Admin' : 'Admin',
       user_type: 'Admin',
       action: 'Admin Portal Login',
-      details: `Admin authenticated successfully (@${user.username})`,
+      details: `Admin authenticated successfully (@${adminRecord.username})`,
       format: 'System'
     });
 
-    let encryptedSession = '';
-    try {
-      encryptedSession = encryptSecret(JSON.stringify(sessionPayload));
-      console.log('[AUTH FLOW] Session created and encrypted successfully');
-    } catch (encryptErr: any) {
-      console.error('[AUTH FLOW] Session encryption failed:', encryptErr.message);
-      return res.status(500).json({ error: 'Internal error: Session creation failed' });
-    }
-
+    const encryptedSession = encryptSecret(JSON.stringify(sessionPayload));
     const sessionCookieOptions = getSessionCookieAttributes(req);
-    console.log('[AUTH FLOW] Generated Cookie options:', sessionCookieOptions);
     res.setHeader('Set-Cookie', `trackbook_session=${encodeURIComponent(encryptedSession)}; ${sessionCookieOptions}`);
-    console.log('[AUTH FLOW] Cookie set on response header');
 
-    res.json({
+    return res.json({
       success: true,
       token: encryptedSession,
       user: {
-        id: user.id,
-        username: user.username,
-        full_name: user.full_name,
-        role: user.role
+        id: adminRecord.id,
+        username: adminRecord.username,
+        full_name: adminRecord.full_name,
+        role: adminRecord.role
       }
     });
   } catch (err: any) {
     console.error('[AUTH FLOW] Unhandled exception in login:', err);
-    res.status(500).json({ error: 'Internal server error during login' });
+    return res.status(500).json({ error: 'Internal server error during login' });
   }
 });
 
@@ -860,43 +827,25 @@ app.post('/api/admin/create-first-admin', async (req, res) => {
       updated_at: nowStr
     };
 
-    // Try to insert in Supabase first
     const adminClient = getSupabaseAdmin();
-    let createdInSupabase = false;
-
-    if (adminClient) {
-      try {
-        const { data, error } = await adminClient
-          .from('admin_users')
-          .insert(newAdmin)
-          .select();
-        
-        if (!error && data && data.length > 0) {
-          createdInSupabase = true;
-          console.log('[AUTH SUCCESS] First admin user successfully created in Supabase with 12 salt rounds.');
-        } else if (error) {
-          console.warn('[AUTH WARNING] Supabase insert failed:', error.message);
-        }
-      } catch (err: any) {
-        console.warn('[AUTH WARNING] Supabase insert exception:', err.message);
-      }
+    if (!adminClient) {
+      return res.status(500).json({ error: 'Database service unavailable' });
     }
 
-    if (!createdInSupabase) {
-      // Fallback to local JSON file
-      const admins = readFallbackAdmins();
-      if (admins.length > 0) {
-        return res.status(403).json({ error: 'Forbidden: Admin already exists in fallback' });
-      }
-      admins.push(newAdmin);
-      writeFallbackAdmins(admins);
-      console.log('[AUTH SUCCESS] First admin user created in local JSON fallback with 12 salt rounds.');
+    const { data, error } = await adminClient
+      .from('admin_users')
+      .insert(newAdmin)
+      .select();
+
+    if (error) {
+      console.error('[CREATE FIRST ADMIN] Supabase insert error:', error.message);
+      return res.status(500).json({ error: 'Database insert failed: ' + error.message });
     }
 
     res.json({
       success: true,
       message: 'First Super Admin user created successfully!',
-      source: createdInSupabase ? 'Supabase Database' : 'Local Fallback Storage',
+      source: 'Supabase Database',
       user: {
         id: userId,
         username,
@@ -910,34 +859,73 @@ app.post('/api/admin/create-first-admin', async (req, res) => {
   }
 });
 
+// Heartbeat with live Supabase admin_users authorization check
 authRouter.get('/heartbeat', async (req, res) => {
   const sessionToken = getSessionToken(req);
-  if (sessionToken) {
-    try {
-      const decrypted = decryptSecret(sessionToken);
-      const session = JSON.parse(decrypted);
-      if (session && session.user) {
-        touchUserPresence(session.user.id);
-        touchUserPresence(session.user.username);
-        touchUserPresence(session.user.full_name);
-        touchUserPresence(session.user.email);
-      }
-    } catch (e) {}
+  if (!sessionToken) {
+    return res.status(401).json({ error: 'Unauthorized: No active session' });
   }
-  res.json({ ok: true, timestamp: Date.now() });
+
+  try {
+    const decrypted = decryptSecret(sessionToken);
+    const session = JSON.parse(decrypted);
+    if (!session || !session.admin || session.expiresAt <= Date.now() || !session.user?.id) {
+      const cookieOptions = getSessionCookieAttributes(req, 0);
+      res.setHeader('Set-Cookie', `trackbook_session=; ${cookieOptions}`);
+      return res.status(401).json({ error: 'Unauthorized: Session expired' });
+    }
+
+    const adminClient = getSupabaseAdmin();
+    if (!adminClient) {
+      return res.status(500).json({ error: 'Database service unavailable' });
+    }
+
+    // Authoritative check against admin_users
+    const { data: adminRecord, error } = await adminClient
+      .from('admin_users')
+      .select('id, username, full_name, role, status')
+      .eq('id', session.user.id)
+      .maybeSingle();
+
+    if (error || !adminRecord || (adminRecord.status && adminRecord.status.toLowerCase() !== 'active')) {
+      console.warn(`[HEARTBEAT] Revoked session detected for admin user ID: ${session.user.id}`);
+      const cookieOptions = getSessionCookieAttributes(req, 0);
+      res.setHeader('Set-Cookie', `trackbook_session=; ${cookieOptions}`);
+      return res.status(401).json({
+        error: 'Unauthorized: You are not authorized to access the Admin Panel.',
+        revoked: true
+      });
+    }
+
+    touchUserPresence(adminRecord.id);
+    touchUserPresence(adminRecord.username);
+
+    return res.json({ ok: true, timestamp: Date.now(), user: adminRecord.username });
+  } catch (e) {
+    const cookieOptions = getSessionCookieAttributes(req, 0);
+    res.setHeader('Set-Cookie', `trackbook_session=; ${cookieOptions}`);
+    return res.status(401).json({ error: 'Unauthorized: Invalid session' });
+  }
 });
 
 app.use('/api/auth', authRouter);
 
 // Middleware to secure all other API endpoints
-function requireAuth(req: any, res: any, next: any) {
+// Live authorization verification against Supabase admin_users on every request (RULES 1, 2, 3, 4)
+async function requireAuth(req: any, res: any, next: any) {
   // Allow non-API routes to bypass authentication (Vite / SPA fallback / static files)
   if (!req.path.startsWith('/api/')) {
     return next();
   }
 
   // Allow public auth and first admin creation endpoints
-  if (req.path.startsWith('/api/auth/') || req.path === '/api/admin/create-first-admin') {
+  if (
+    req.path === '/api/auth/session' ||
+    req.path === '/api/auth/login' ||
+    req.path === '/api/auth/logout' ||
+    req.path === '/api/admin/create-first-admin' ||
+    req.path === '/api/users/presence'
+  ) {
     return next();
   }
 
@@ -950,25 +938,67 @@ function requireAuth(req: any, res: any, next: any) {
   try {
     const decrypted = decryptSecret(sessionToken);
     const session = JSON.parse(decrypted);
-    if (!session || !session.admin || session.expiresAt < Date.now()) {
+    if (!session || !session.admin || session.expiresAt <= Date.now() || !session.user?.id) {
+      const cookieOptions = getSessionCookieAttributes(req, 0);
+      res.setHeader('Set-Cookie', `trackbook_session=; ${cookieOptions}`);
       return res.status(401).json({ error: 'Unauthorized: Session expired or invalid' });
     }
-    // Session is valid
-    if (session.user) {
-      req.adminUser = session.user;
-      touchUserPresence(session.user.id);
-      touchUserPresence(session.user.username);
-      touchUserPresence(session.user.full_name);
-      touchUserPresence(session.user.email);
+
+    // Authoritative check against Supabase admin_users
+    const adminClient = getSupabaseAdmin();
+    if (!adminClient) {
+      return res.status(500).json({ error: 'Database service unavailable' });
     }
+
+    const { data: adminRecord, error: dbErr } = await adminClient
+      .from('admin_users')
+      .select('id, username, full_name, role, status')
+      .eq('id', session.user.id)
+      .maybeSingle();
+
+    if (dbErr || !adminRecord || (adminRecord.status && adminRecord.status.toLowerCase() !== 'active')) {
+      console.warn(`[AUTH REVOKED] Immediate revocation: user '${session.user?.username}' (${session.user?.id}) is not active in admin_users.`);
+      const cookieOptions = getSessionCookieAttributes(req, 0);
+      res.setHeader('Set-Cookie', `trackbook_session=; ${cookieOptions}`);
+      return res.status(401).json({
+        error: 'Unauthorized: You are not authorized to access the Admin Panel.',
+        revoked: true
+      });
+    }
+
+    req.adminUser = {
+      id: adminRecord.id,
+      username: adminRecord.username,
+      full_name: adminRecord.full_name,
+      role: adminRecord.role
+    };
+
+    touchUserPresence(adminRecord.id);
+    touchUserPresence(adminRecord.username);
+    touchUserPresence(adminRecord.full_name);
+
     next();
   } catch (err) {
+    const cookieOptions = getSessionCookieAttributes(req, 0);
+    res.setHeader('Set-Cookie', `trackbook_session=; ${cookieOptions}`);
     return res.status(401).json({ error: 'Unauthorized: Invalid session' });
   }
 }
 
-// Middleware to check admin role for sensitive administrative operations
+// Middleware to check admin role for sensitive administrative operations (Strictly Super Admin)
 function requireSuperAdmin(req: any, res: any, next: any) {
+  const role = ((req.adminUser?.role || '') as string).toLowerCase().replace(/[\s_-]+/g, '');
+  if (role !== 'superadmin') {
+    return res.status(403).json({ 
+      error: 'Forbidden: Restricted to Super Administrator only. Request access from Super Admin.',
+      requires_super_admin: true
+    });
+  }
+  next();
+}
+
+// Middleware for operations permitted to both standard Admins and Super Admins
+function requireAdmin(req: any, res: any, next: any) {
   const role = ((req.adminUser?.role || '') as string).toLowerCase().replace(/[\s_-]+/g, '');
   if (!role || (role !== 'superadmin' && role !== 'admin')) {
     return res.status(403).json({ error: 'Forbidden: Restricted to administrators only.' });
@@ -1507,69 +1537,35 @@ app.post('/api/admin/users/assign-role', requireSuperAdmin, async (req: any, res
     const nowStr = new Date().toISOString();
 
     const adminClient = getSupabaseAdmin();
-    let savedInSupabase = false;
-
-    if (adminClient) {
-      try {
-        const { data: existing } = await adminClient
-          .from('admin_users')
-          .select('id')
-          .or(`username.eq.${username}${userId ? `,id.eq.${userId}` : ''}`);
-
-        if (existing && existing.length > 0) {
-          const { error: updErr } = await adminClient
-            .from('admin_users')
-            .update({
-              username,
-              password_hash: hashedPassword,
-              full_name,
-              role: roleNormalized,
-              updated_at: nowStr
-            })
-            .eq('id', existing[0].id);
-
-          if (!updErr) savedInSupabase = true;
-        } else {
-          const newAdmin = {
-            id: userId || crypto.randomUUID(),
-            username,
-            password_hash: hashedPassword,
-            full_name,
-            role: roleNormalized,
-            status: 'active',
-            last_login_at: null,
-            created_at: nowStr,
-            updated_at: nowStr
-          };
-          const { error: insErr } = await adminClient
-            .from('admin_users')
-            .insert(newAdmin);
-
-          if (!insErr) savedInSupabase = true;
-        }
-      } catch (err: any) {
-        console.warn('[ASSIGN ROLE] Supabase insert/update warning:', err.message);
-      }
+    if (!adminClient) {
+      return res.status(500).json({ error: 'Database service unavailable' });
     }
 
-    // Always update local fallback JSON as well
-    const fallbackAdmins = readFallbackAdmins();
-    const existingIdx = fallbackAdmins.findIndex(
-      a => a.username.toLowerCase() === username.toLowerCase() || (userId && a.id === userId)
-    );
+    const targetId = userId || crypto.randomUUID();
+    const { data: existing } = await adminClient
+      .from('admin_users')
+      .select('id')
+      .or(`username.ilike.${username},id.eq.${targetId}`);
 
-    if (existingIdx >= 0) {
-      fallbackAdmins[existingIdx] = {
-        ...fallbackAdmins[existingIdx],
-        username,
-        password_hash: hashedPassword,
-        full_name,
-        role: roleNormalized,
-        updated_at: nowStr
-      };
+    if (existing && existing.length > 0) {
+      const { error: updErr } = await adminClient
+        .from('admin_users')
+        .update({
+          username,
+          password_hash: hashedPassword,
+          full_name,
+          role: roleNormalized,
+          status: 'active',
+          updated_at: nowStr
+        })
+        .eq('id', existing[0].id);
+
+      if (updErr) {
+        return res.status(500).json({ error: 'Failed to update admin user in database: ' + updErr.message });
+      }
     } else {
-      fallbackAdmins.push({
-        id: userId || crypto.randomUUID(),
+      const newAdmin = {
+        id: targetId,
         username,
         password_hash: hashedPassword,
         full_name,
@@ -1578,17 +1574,21 @@ app.post('/api/admin/users/assign-role', requireSuperAdmin, async (req: any, res
         last_login_at: null,
         created_at: nowStr,
         updated_at: nowStr
-      });
+      };
+      const { error: insErr } = await adminClient
+        .from('admin_users')
+        .insert(newAdmin);
+
+      if (insErr) {
+        return res.status(500).json({ error: 'Failed to insert admin user into database: ' + insErr.message });
+      }
     }
-    writeFallbackAdmins(fallbackAdmins);
 
     // If userId provided, sync user role in users table too
-    if (userId && adminClient) {
+    if (userId) {
       try {
         await adminClient.from('users').update({ role: roleNormalized === 'super_admin' ? 'Super Admin' : 'Admin' }).eq('id', userId);
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) {}
     }
 
     recordAuditLog({
@@ -1604,6 +1604,7 @@ app.post('/api/admin/users/assign-role', requireSuperAdmin, async (req: any, res
       success: true,
       message: `Role '${roleNormalized}' successfully assigned to ${full_name}`,
       user: {
+        id: targetId,
         username,
         full_name,
         role: roleNormalized
@@ -1618,34 +1619,20 @@ app.post('/api/admin/users/assign-role', requireSuperAdmin, async (req: any, res
 app.get('/api/admin/users/roles', requireSuperAdmin, async (req: any, res: any) => {
   try {
     const adminClient = getSupabaseAdmin();
-    let dbAdmins: any[] = [];
-    if (adminClient) {
-      try {
-        const { data, error } = await adminClient
-          .from('admin_users')
-          .select('id, username, full_name, role, status, last_login_at, created_at');
-        if (!error && data) {
-          dbAdmins = data;
-        }
-      } catch (err) {
-        // ignore
-      }
+    if (!adminClient) {
+      return res.status(500).json({ error: 'Database service unavailable' });
     }
 
-    if (dbAdmins.length === 0) {
-      const fallbacks = readFallbackAdmins();
-      dbAdmins = fallbacks.map(f => ({
-        id: f.id,
-        username: f.username,
-        full_name: f.full_name,
-        role: f.role,
-        status: f.status,
-        last_login_at: f.last_login_at,
-        created_at: f.created_at
-      }));
+    const { data, error } = await adminClient
+      .from('admin_users')
+      .select('id, username, full_name, role, status, last_login_at, created_at')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
     }
 
-    res.json({ success: true, admins: dbAdmins });
+    res.json({ success: true, admins: data || [] });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1675,33 +1662,17 @@ app.put('/api/admin/users/:id', requireSuperAdmin, async (req: any, res: any) =>
     }
 
     const adminClient = getSupabaseAdmin();
-    let updatedInSupabase = false;
-
-    if (adminClient) {
-      try {
-        const { error } = await adminClient
-          .from('admin_users')
-          .update(updateFields)
-          .eq('id', id);
-        if (!error) updatedInSupabase = true;
-      } catch (err: any) {
-        console.warn('[UPDATE ADMIN] Supabase update warning:', err.message);
-      }
+    if (!adminClient) {
+      return res.status(500).json({ error: 'Database service unavailable' });
     }
 
-    // Always update fallback JSON
-    const fallbackAdmins = readFallbackAdmins();
-    const idx = fallbackAdmins.findIndex(a => a.id === id || a.username.toLowerCase() === username.toLowerCase());
-    if (idx >= 0) {
-      fallbackAdmins[idx] = {
-        ...fallbackAdmins[idx],
-        username: updateFields.username,
-        full_name: updateFields.full_name,
-        role: updateFields.role,
-        updated_at: nowStr,
-        ...(updateFields.password_hash ? { password_hash: updateFields.password_hash } : {})
-      };
-      writeFallbackAdmins(fallbackAdmins);
+    const { error } = await adminClient
+      .from('admin_users')
+      .update(updateFields)
+      .eq('id', id);
+
+    if (error) {
+      return res.status(500).json({ error: 'Failed to update admin user: ' + error.message });
     }
 
     res.json({
@@ -1716,22 +1687,67 @@ app.put('/api/admin/users/:id', requireSuperAdmin, async (req: any, res: any) =>
 app.delete('/api/admin/users/:id', requireSuperAdmin, async (req: any, res: any) => {
   try {
     const { id } = req.params;
+    const targetUsername = (req.query.username || req.body?.username || '').toString().trim();
     const adminClient = getSupabaseAdmin();
+    const superAdminName = req.adminUser?.full_name || req.adminUser?.username || 'Super Admin';
 
-    if (adminClient) {
-      try {
-        await adminClient.from('admin_users').delete().eq('id', id);
-      } catch (err: any) {
-        console.warn('[DELETE ADMIN] Supabase delete warning:', err.message);
-      }
+    if (!adminClient) {
+      return res.status(500).json({ error: 'Database service unavailable' });
     }
 
-    // Delete from fallback JSON
-    let fallbackAdmins = readFallbackAdmins();
-    fallbackAdmins = fallbackAdmins.filter(a => a.id !== id);
-    writeFallbackAdmins(fallbackAdmins);
+    let foundAdminName = '';
+    let foundAdminUsername = targetUsername;
 
-    res.json({ success: true, message: 'Admin user deleted successfully.' });
+    // Locate admin details for audit logging before deletion
+    try {
+      const { data: dbAdmin } = await adminClient
+        .from('admin_users')
+        .select('id, username, full_name')
+        .or(`id.eq.${id}${targetUsername ? `,username.ilike.${targetUsername}` : ''}`);
+      if (dbAdmin && dbAdmin.length > 0) {
+        foundAdminName = dbAdmin[0].full_name;
+        foundAdminUsername = dbAdmin[0].username;
+      }
+    } catch (e) {}
+
+    const usernameToRevoke = foundAdminUsername || targetUsername;
+
+    // Delete authoritatively from Supabase admin_users table
+    const { error: delErr } = await adminClient.from('admin_users').delete().eq('id', id);
+    if (delErr) {
+      console.error('[DELETE ADMIN] Error deleting admin from admin_users:', delErr.message);
+      return res.status(500).json({ error: 'Failed to remove admin user from database: ' + delErr.message });
+    }
+
+    if (usernameToRevoke) {
+      await adminClient.from('admin_users').delete().ilike('username', usernameToRevoke);
+    }
+
+    // Demote role in public users table if account exists
+    try {
+      if (id) {
+        await adminClient.from('users').update({ role: 'User' }).eq('id', id);
+      }
+      if (usernameToRevoke) {
+        await adminClient.from('users').update({ role: 'User' }).ilike('name', usernameToRevoke);
+      }
+    } catch (err: any) {
+      console.warn('[DELETE ADMIN] Supabase user role demote warning:', err.message);
+    }
+
+    recordAuditLog({
+      user_name: superAdminName,
+      user_role: 'Super Admin',
+      user_type: 'Admin',
+      action: 'Admin Access Revoked',
+      details: `Revoked admin privileges and deleted authorization record for ${foundAdminName || usernameToRevoke} (@${usernameToRevoke})`,
+      format: 'System'
+    });
+
+    res.json({ 
+      success: true, 
+      message: `Admin user '${usernameToRevoke || id}' deleted from admin_users and access revoked immediately.` 
+    });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to delete admin user: ' + err.message });
   }
@@ -1771,7 +1787,7 @@ app.get('/api/settings/access-status', async (req: any, res: any) => {
   });
 });
 
-app.post('/api/settings/access-request', async (req: any, res: any) => {
+app.post(['/api/settings/access-request', '/api/users/access-request'], async (req: any, res: any) => {
   const user = req.adminUser;
   if (!user) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -1780,39 +1796,32 @@ app.post('/api/settings/access-request', async (req: any, res: any) => {
   if (role === 'superadmin') {
     return res.json({
       success: true,
-      message: 'Super Administrator already has full access to System Settings.',
+      message: 'Super Administrator already has full access.',
       canAccess: true
     });
   }
 
   const adminName = user.full_name || user.username || 'Admin';
+  const target = req.body.target || 'System Settings';
+  const reason = (req.body.reason || '').trim();
+  const customMessage = req.body.message || (reason 
+    ? `Admin ${adminName} (${user.username}) requested permission for ${target}. Reason: ${reason}` 
+    : `Admin ${adminName} (${user.username}) requested permission for ${target}`);
+
   const requests = readAccessRequests();
 
-  const existingPending = requests.find(r => 
-    ((user.id && r.admin_id === user.id) || (user.username && r.admin_username && r.admin_username.toLowerCase() === user.username.toLowerCase())) &&
-    r.status === 'pending'
-  );
-
-  let newReq: AccessRequest;
-  if (existingPending) {
-    existingPending.requested_at = new Date().toISOString();
-    existingPending.admin_name = adminName;
-    existingPending.message = `Admin ${adminName} (${user.username}) is requesting access to System Settings`;
-    newReq = existingPending;
-  } else {
-    newReq = {
-      id: `req-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      admin_id: user.id || `admin-${Date.now()}`,
-      admin_username: user.username,
-      admin_name: adminName,
-      admin_role: user.role || 'admin',
-      target: 'System Settings',
-      requested_at: new Date().toISOString(),
-      status: 'pending',
-      message: `Admin ${adminName} (${user.username}) is requesting access to System Settings`
-    };
-    requests.unshift(newReq);
-  }
+  const newReq: AccessRequest = {
+    id: `req-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    admin_id: user.id || `admin-${Date.now()}`,
+    admin_username: user.username,
+    admin_name: adminName,
+    admin_role: user.role || 'admin',
+    target,
+    requested_at: new Date().toISOString(),
+    status: 'pending',
+    message: customMessage
+  };
+  requests.unshift(newReq);
 
   writeAccessRequests(requests);
 
@@ -1820,8 +1829,8 @@ app.post('/api/settings/access-request', async (req: any, res: any) => {
     user_name: adminName,
     user_role: 'Admin',
     user_type: 'Admin',
-    action: 'Settings Access Requested',
-    details: `Admin ${adminName} (${user.username}) requested authorization to access System Settings`,
+    action: 'Access Requested',
+    details: customMessage,
     format: 'System'
   });
 
@@ -2101,6 +2110,14 @@ app.put('/api/users/:id', async (req, res) => {
     return res.status(500).json({ error: 'Supabase configuration is missing.' });
   }
 
+  const callerRole = (((req as any).adminUser?.role || '') as string).toLowerCase().replace(/[\s_-]+/g, '');
+  const isSuperAdminCaller = callerRole === 'superadmin';
+
+  // Prevent non-superadmin from changing or granting admin roles
+  if (!isSuperAdminCaller && role && (role.toLowerCase().includes('admin') || role === 'Super Admin')) {
+    return res.status(403).json({ error: 'Forbidden: Only Super Administrator can grant Admin roles.' });
+  }
+
   try {
     // 1. Update auth.users
     if (supabase) {
@@ -2164,88 +2181,21 @@ app.put('/api/users/:id', async (req, res) => {
 
 app.delete('/api/users/:id', requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
-  const supabase = getSupabaseAdmin();
-
-  if (!supabase) {
-    return res.status(500).json({ error: 'Supabase configuration is missing.' });
-  }
-
-  try {
-    console.log(`[USER DELETE] Initiating deletion for user ID: ${id}`);
-
-    // Clean up dependent tables if any exist
-    try {
-      await supabase.from('profiles').delete().eq('id', id);
-    } catch {}
-    try {
-      await supabase.from('profiles').delete().eq('user_id', id);
-    } catch {}
-    try {
-      await supabase.from('cashbook_members').delete().eq('user_id', id);
-    } catch {}
-    try {
-      await supabase.from('entries').delete().eq('user_id', id);
-    } catch {}
-    try {
-      await supabase.from('cashbooks').delete().eq('user_id', id);
-    } catch {}
-    try {
-      await supabase.from('admin_users').delete().eq('id', id);
-    } catch {}
-
-    // Clean up fallback_admins
-    try {
-      let fallbackAdmins = readFallbackAdmins();
-      fallbackAdmins = fallbackAdmins.filter(a => a.id !== id);
-      writeFallbackAdmins(fallbackAdmins);
-    } catch {}
-
-    // 1. Delete from Supabase Auth
-    try {
-      const { error: authErr } = await supabase.auth.admin.deleteUser(id);
-      if (authErr) {
-        console.warn('[USER DELETE] Supabase auth deleteUser notice:', authErr.message);
-      } else {
-        console.log('[USER DELETE] Successfully removed user from Supabase Auth');
-      }
-    } catch (e: any) {
-      console.warn('[USER DELETE] Error deleting auth user:', e.message);
-    }
-
-    // 2. Delete public table user
-    try {
-      const { error: pubErr } = await supabase
-        .from('users')
-        .delete()
-        .eq('id', id);
-      if (pubErr) {
-        console.warn('[USER DELETE] Public table delete notice:', pubErr.message);
-      }
-    } catch (e: any) {
-      console.warn('[USER DELETE] Error deleting public table user:', e.message);
-    }
-
-    const adminActor = (req as any).adminUser?.full_name || (req as any).adminUser?.username || 'Admin';
-    recordAuditLog({
-      user_name: adminActor,
-      user_role: (req as any).adminUser?.role === 'super_admin' ? 'Super Admin' : 'Admin',
-      user_type: 'Admin',
-      action: 'Customer Account Removed',
-      details: `Removed user account ID: ${id} from registry`,
-      format: 'System'
-    });
-
-    res.json({ success: true, message: 'User deleted successfully.' });
-  } catch (err: any) {
-    console.error('[USER DELETE] Supabase user delete error:', err);
-    res.status(500).json({ error: err.message || 'Failed to delete user.' });
-  }
+  console.warn(`[USER DELETE] Direct deletion request rejected for user ID: ${id}. Users must be deleted directly from DB.`);
+  return res.status(403).json({
+    error: 'Direct user deletion from Admin Panel is disabled for security and ledger integrity. Users must be deleted directly from the Supabase Database (DB lonchi delete cheyyali).'
+  });
 });
 
 // Ban / Block user in Supabase Authentication (Accessible to Admins & Super Admins)
 app.post(['/api/users/:id/ban', '/api/users/:id/block'], async (req: any, res: any) => {
   const { id } = req.params;
   const { duration, unit, reason } = req.body;
+
+  if (!reason || typeof reason !== 'string' || !reason.trim()) {
+    return res.status(400).json({ error: 'A mandatory reason is required to block this user (కారణం తప్పనిసరి).' });
+  }
+
   const supabase = getSupabaseAdmin();
 
   if (!supabase) {
