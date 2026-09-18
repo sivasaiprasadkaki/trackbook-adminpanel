@@ -155,7 +155,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
         }
       }
     } catch (err) {
-      console.error('Error fetching admin users:', err);
+      console.warn('Transient error fetching admin users:', err);
     } finally {
       setIsAdminUsersLoading(false);
     }
@@ -407,7 +407,7 @@ export default function UsersView({ onRefreshStats, isSuperAdmin = false, curren
         setIsDbConnected(false);
       }
     } catch (err) {
-      console.error('Error fetching users:', err);
+      console.warn('Transient error fetching users:', err);
       setIsDbConnected(false);
     } finally {
       if (showLoading) setLoading(false);

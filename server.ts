@@ -4134,8 +4134,6 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 
 // Configure Vite middleware or static serving
 async function startServer() {
-  await runStartupVerification();
-
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -4153,6 +4151,10 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`TrackBook Admin Server running on http://0.0.0.0:${PORT}`);
+    // Run Supabase verification asynchronously in background without blocking initial request handling
+    runStartupVerification().catch(err => {
+      console.error('[STARTUP VERIFICATION ERROR]', err);
+    });
   });
 }
 

@@ -239,7 +239,7 @@ export default function App() {
           setIsAuthenticated(false);
         }
       } catch (err) {
-        console.error('Error updating user presence:', err);
+        console.warn('Transient error updating user presence:', err);
       }
     };
 

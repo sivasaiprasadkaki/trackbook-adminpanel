@@ -62,6 +62,7 @@ export default function Topbar({
 
   // Fetch notifications
   const fetchNotifications = async () => {
+    if (!currentUser) return;
     try {
       const res = await fetch('/api/notifications');
       if (res.ok) {
@@ -70,16 +71,22 @@ export default function Topbar({
         setUnreadCount(data.unreadCount || 0);
       }
     } catch (err) {
-      console.error('[TOPBAR] Failed to fetch notifications:', err);
+      console.warn('[TOPBAR] Failed to fetch notifications:', err);
     }
   };
 
   useEffect(() => {
-    fetchNotifications();
-    // Poll notifications every 10 seconds
-    const interval = setInterval(fetchNotifications, 10000);
+    if (currentUser) {
+      fetchNotifications();
+    }
+    // Poll notifications every 10 seconds only when authenticated
+    const interval = setInterval(() => {
+      if (currentUser) {
+        fetchNotifications();
+      }
+    }, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentUser]);
 
   // Sync custom start/end when dateRange changes externally
   useEffect(() => {
